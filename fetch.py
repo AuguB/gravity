@@ -458,9 +458,11 @@ Examples:
         print(f"Authenticated as: {auth_user.get('login')}")
 
     # --- Owned repos ---
+    # /user/repos (authenticated) returns private repos too; /users/{user}/repos is public-only.
     print(f"\nFetching owned repos for user: {user}")
+    repo_endpoint = "/user/repos" if token else f"/users/{user}/repos"
     owned_repos = client.get_all_pages(
-        f"/users/{user}/repos",
+        repo_endpoint,
         {"type": "owner", "sort": "updated"},
         max_pages=50,
     )
