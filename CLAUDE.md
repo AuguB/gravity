@@ -5,10 +5,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-# Fetch data for a GitHub user (reads GITHUB_TOKEN and GITHUB_USER from .env)
-uv run fetch.py <username>
-uv run fetch.py <username> --skip-forks --skip-archived --limit 10
-uv run fetch.py <username> --no-contributed   # only show owned repos
+# Fetch data for a GitHub org (reads GITHUB_TOKEN/.env)
+uv run fetch.py <org>
+uv run fetch.py <org> --skip-forks --skip-archived --limit 10
 
 # Serve the visualization locally (open http://localhost:8000)
 python3 -m http.server 8000 --directory docs
@@ -20,7 +19,7 @@ No build step, no tests — `docs/index.html` is a self-contained single-file ap
 
 Two files do all the work:
 
-- **`fetch.py`** — Python script that hits the GitHub API and writes `docs/data.json`. Fetches repos owned by the user, plus repos the user contributed to (via their public events). Reads package manifests to extract dependency names, then cross-references them to build internal dependency edges. Each repo is tagged `type: "owned"` or `type: "contributed"`.
+- **`fetch.py`** — Python script that hits the GitHub API and writes `docs/data.json`. Reads package manifests (`package.json`, `requirements.txt`, `pyproject.toml`, `go.mod`, `Cargo.toml`, `Gemfile`, etc.) to extract dependency names, then cross-references them against org repo names to build internal dependency edges.
 
 - **`docs/index.html`** — ~2500-line single-file app (HTML + CSS + JS). Uses D3.js for force simulation, marked.js for README rendering. No bundler, no build step — everything is inline.
 
@@ -61,13 +60,12 @@ Mouse drag on `#graph-container` updates `vpTransform` and applies a CSS `transf
 
 ```json
 {
-  "user": "string",
+  "org": "string",
   "generated_at": "ISO8601",
   "total_repos": 42,
   "repos": [{
     "id": "repo-name",
     "name": "repo-name",
-    "type": "owned|contributed",
     "languages": { "Python": 12345 },
     "contributors": [{ "login": "...", "avatar_url": "...", "commit_count": 10, "pr_count": 2 }],
     "commit_frequency": [0, 3, ...],   // 52 weekly totals
