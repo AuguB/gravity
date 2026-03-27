@@ -298,19 +298,42 @@ def build_internal_deps(repos_data):
 
 
 def fetch_contributed_repo_names(client, user):
-    """Return set of 'owner/repo' full-names for repos the user contributed to but doesn't own."""
-    events = client.get_all_pages(f"/users/{user}/events", max_pages=3)
+    """Return set of 'owner/repo' full-names for repos the user contributed to but doesn't own.
+
+    Uses the GitHub GraphQL repositoriesContributedTo field, which covers the full
+    contribution history (not limited to recent events).
+    """
+    query = """
+    query($login: String!, $cursor: String) {
+      user(login: $login) {
+        repositoriesContributedTo(
+          first: 100
+          after: $cursor
+          includeUserRepositories: false
+          contributionTypes: [COMMIT, PULL_REQUEST, PULL_REQUEST_REVIEW]
+        ) {
+          nodes { nameWithOwner }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    }
+    """
     names = set()
-    for ev in (events or []):
-        if ev.get("type") in (
-            "PushEvent", "PullRequestEvent", "CreateEvent",
-            "CommitCommentEvent", "PullRequestReviewEvent",
-        ):
-            full_name = ev.get("repo", {}).get("name", "")
-            if full_name and "/" in full_name:
-                owner = full_name.split("/")[0]
-                if owner.lower() != user.lower():
-                    names.add(full_name)
+    cursor = None
+    while True:
+        resp = client.session.post(
+            f"{client.base_url}/graphql",
+            json={"query": query, "variables": {"login": user, "cursor": cursor}},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        contrib = data.get("data", {}).get("user", {}).get("repositoriesContributedTo", {})
+        for node in contrib.get("nodes", []):
+            names.add(node["nameWithOwner"])
+        page_info = contrib.get("pageInfo", {})
+        if not page_info.get("hasNextPage"):
+            break
+        cursor = page_info["endCursor"]
     return names
 
 
@@ -456,14 +479,17 @@ Examples:
     # --- Contributed repos ---
     contributed_repos = []
     if not args.no_contributed:
-        print(f"\nFetching contributed repos for user: {user}")
-        contrib_names = fetch_contributed_repo_names(client, user)
-        print(f"  Found {len(contrib_names)} external repos in recent events")
-        for full_name in contrib_names:
-            repo = client.get_json(f"/repos/{full_name}")
-            if repo and repo.get("id") not in owned_ids:
-                contributed_repos.append(repo)
-        print(f"  Fetched {len(contributed_repos)} contributed repos")
+        if not token:
+            print("\nSkipping contributed repos (requires a token for GraphQL).")
+        else:
+            print(f"\nFetching contributed repos for user: {user}")
+            contrib_names = fetch_contributed_repo_names(client, user)
+            print(f"  Found {len(contrib_names)} contributed repos in history")
+            for full_name in contrib_names:
+                repo = client.get_json(f"/repos/{full_name}")
+                if repo and repo.get("id") not in owned_ids:
+                    contributed_repos.append(repo)
+            print(f"  Fetched {len(contributed_repos)} contributed repos")
 
     # Combine, deduplicating by id
     seen_ids = set()

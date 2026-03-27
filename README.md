@@ -79,4 +79,4 @@ python fetch.py <username> [--token TOKEN] [--output PATH]
 
 ## Notes on contributed repos
 
-Contributed repos are discovered from your recent public GitHub events (last ~300 events, roughly 90 days of activity). Repos you contributed to before that window may not appear. Only repos not owned by you are included.
+Contributed repos are discovered via the GitHub GraphQL `repositoriesContributedTo` field, which covers your full contribution history. Only repos not owned by you are included. Contributions counted: commits, pull requests, and PR reviews.
