@@ -1,0 +1,2698 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gravity — GitHub User Visualizer</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
+<style>
+/* ── Theme variables ── */
+:root {
+  --bg:       #0d1117;
+  --bg-1:     #161b22;
+  --bg-2:     #1c2128;
+  --bg-3:     #21262d;
+  --bdr:      #30363d;
+  --bdr-s:    #21262d;
+  --txt:      #e6edf3;
+  --txt-m:    #8b949e;
+  --txt-d:    #6e7681;
+  --txt-p:    #4a5568;
+  --thumb:    #444d56;
+  --thumb-bd: #6e7681;
+  --thumb-hv: #586069;
+  --bg-err:   #1c1215;
+  --blue:     #388bfd;
+  --blue-hi:  #58a6ff;
+  --blue-edge:#388bfd44;
+  --blue-arr: #388bfd88;
+  --blue-hid: #58a6ff44;
+  --blue-dim: #388bfd11;
+}
+html.light {
+  --bg:       #f6f8fa;
+  --bg-1:     #ffffff;
+  --bg-2:     #f3f4f6;
+  --bg-3:     #eaeef2;
+  --bdr:      #d0d7de;
+  --bdr-s:    #d8dee4;
+  --txt:      #24292f;
+  --txt-m:    #57606a;
+  --txt-d:    #6e7681;
+  --txt-p:    #9ca3af;
+  --thumb:    #afb8c1;
+  --thumb-bd: #8c959f;
+  --thumb-hv: #8c959f;
+  --bg-err:   #fff0f0;
+  --blue:     #0969da;
+  --blue-hi:  #0969da;
+  --blue-edge:rgba(9,105,218,.27);
+  --blue-arr: rgba(9,105,218,.53);
+  --blue-hid: rgba(9,105,218,.27);
+  --blue-dim: rgba(9,105,218,.07);
+}
+
+/* ── Reset & base ── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; font-size: 13px; background: var(--bg); color: var(--txt); }
+
+/* ── Layout ── */
+#app { display: flex; height: 100vh; }
+#sidebar-left, #sidebar-right { width: 260px; min-width: 260px; background: var(--bg-1); border-color: var(--bdr); overflow-y: auto; display: flex; flex-direction: column; z-index: 10; }
+#sidebar-left { border-right: 1px solid var(--bdr); }
+#sidebar-right { border-left: 1px solid var(--bdr); }
+#graph-container { flex: 1; position: relative; overflow: hidden; cursor: grab; }
+#graph-container.panning { cursor: grabbing; }
+
+/* ── SVG edges layer ── */
+#edges-svg { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; transform-origin: 0 0; overflow: visible; }
+.edge { stroke: var(--blue-edge); stroke-width: 1.5; fill: none; }
+.edge.highlighted { stroke: var(--blue-hi); stroke-width: 2; }
+.edge.dimmed { opacity: 0.08; }
+#arrowhead path, #arrowhead-mid path { fill: var(--blue-arr); }
+#arrowhead-hi path, #arrowhead-mid-hi path { fill: var(--blue-hi); }
+
+/* ── Nodes layer ── */
+#nodes-layer { position: absolute; top: 0; left: 0; width: 0; height: 0; transform-origin: 0 0; }
+
+/* ── Repo node tile ── */
+.repo-node {
+  position: absolute;
+  width: 260px;
+  background: var(--bg-1);
+  border: 1px solid var(--bdr);
+  border-radius: 8px;
+  user-select: none;
+  transition: border-color 0.15s, box-shadow 0.15s, opacity 0.2s;
+  will-change: transform;
+}
+.repo-node:hover { border-color: var(--blue-hi); box-shadow: 0 0 0 1px var(--blue-hid); }
+.repo-node.dimmed { opacity: 0.12; }
+.repo-node.highlighted { border-color: var(--blue-hi); box-shadow: 0 0 12px var(--blue-hid); z-index: 5; }
+
+/* Node header (drag handle) */
+.node-header {
+  padding: 8px 10px 6px;
+  cursor: grab;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  border-bottom: 1px solid var(--bdr-s);
+}
+.node-header:active { cursor: grabbing; }
+.node-title { flex: 1; min-width: 0; }
+.repo-name { font-weight: 600; font-size: 13px; color: var(--blue-hi); word-break: break-word; }
+.repo-name a { color: inherit; text-decoration: none; }
+.repo-name a:hover { text-decoration: underline; }
+.node-badges { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 3px; }
+.badge {
+  font-size: 10px; padding: 1px 5px; border-radius: 10px; font-weight: 500;
+  border: 1px solid;
+}
+.badge.archived     { color: #f0883e; border-color: #f0883e44; background: #f0883e11; }
+.badge.private      { color: #a371f7; border-color: #a371f744; background: #a371f711; }
+.badge.fork         { color: var(--txt-m); border-color: #8b949e44; background: #8b949e11; }
+.badge.contributed  { color: #3fb950; border-color: #3fb95044; background: #3fb95011; }
+
+/* Contributed repo node — subtle green left border */
+.repo-node.contributed { border-left: 2px solid #3fb95066; }
+.repo-stars { font-size: 11px; color: var(--txt-m); white-space: nowrap; padding-top: 2px; }
+
+.node-desc {
+  padding: 5px 10px 4px;
+  font-size: 11px;
+  color: var(--txt-m);
+  line-height: 1.4;
+  min-height: 20px;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+/* Sections container */
+.node-sections { border-top: 1px solid var(--bdr-s); }
+
+/* Details toggle button */
+.details-toggle {
+  display: block;
+  width: 100%;
+  padding: 5px 10px;
+  background: none;
+  border: none;
+  border-top: 1px solid var(--bdr-s);
+  color: var(--txt-m);
+  font-size: 11px;
+  cursor: pointer;
+  text-align: left;
+}
+.details-toggle:hover { color: var(--txt); background: var(--bg-2); }
+
+/* Individual section */
+.section { border-bottom: 1px solid var(--bdr-s); }
+.section:last-child { border-bottom: none; }
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 10px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--txt-m);
+  gap: 4px;
+}
+.section-header:hover { background: var(--bg-2); color: var(--txt); }
+.section-header .label { flex: 1; }
+.section-arrow { font-size: 9px; transition: transform 0.15s; }
+.section.open .section-arrow { transform: rotate(90deg); }
+.section-body { display: none; padding: 6px 10px 8px; font-size: 11px; line-height: 1.5; }
+.section.open .section-body { display: block; }
+
+/* When details are collapsed, hide closed sections */
+.node-sections.collapsed .section:not(.open) { display: none; }
+
+/* ── Section content styles ── */
+.created-date { color: var(--txt); }
+
+/* Contributors */
+.contributor { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+.contrib-avatar { width: 20px; height: 20px; border-radius: 50%; }
+.contrib-name { flex: 1; color: var(--blue-hi); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.contrib-stats { font-size: 10px; color: var(--txt-m); white-space: nowrap; }
+.contributors-scroll { max-height: 78px; overflow-y: auto; }
+
+/* Sparkline */
+.sparkline-wrap { margin: 2px 0; }
+.sparkline-wrap svg { display: block; }
+
+/* Languages */
+.lang-row { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
+.lang-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.lang-name { flex: 1; color: var(--txt); }
+.lang-bar-track { flex: 2; background: var(--bg-3); border-radius: 2px; height: 4px; }
+.lang-bar-fill { height: 4px; border-radius: 2px; }
+.lang-pct { font-size: 10px; color: var(--txt-m); width: 34px; text-align: right; }
+
+/* Dependencies */
+.dep-list { display: flex; flex-wrap: wrap; gap: 3px; }
+.dep-tag {
+  font-size: 10px; padding: 1px 6px; background: var(--bg-2); border: 1px solid var(--bdr);
+  border-radius: 10px; color: var(--txt-m); cursor: default;
+}
+.dep-tag.internal { color: var(--blue-hi); border-color: var(--blue-edge); background: var(--blue-dim); }
+.dep-section-label { font-size: 10px; color: var(--txt-m); margin: 4px 0 2px; }
+
+/* README preview in tile */
+.readme-preview {
+  color: var(--txt-m); font-size: 11px; line-height: 1.4;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+  white-space: pre-wrap; word-break: break-word;
+}
+.readme-expand-btn {
+  flex-shrink: 0; padding: 1px 6px;
+  background: var(--bg-2); border: 1px solid var(--bdr); border-radius: 4px;
+  color: var(--blue-hi); font-size: 10px; cursor: pointer; white-space: nowrap; line-height: 1.6;
+}
+.readme-expand-btn:hover { background: var(--bg-3); border-color: var(--blue-hi); }
+
+/* README modal */
+#readme-modal {
+  position: fixed; inset: 0; background: #000000aa; z-index: 200;
+  display: none; align-items: center; justify-content: center;
+}
+#readme-modal.open { display: flex; }
+.readme-modal-box {
+  background: var(--bg-1); border: 1px solid var(--bdr); border-radius: 10px;
+  width: 90%; max-width: 720px; max-height: 82vh; display: flex; flex-direction: column;
+  box-shadow: 0 8px 32px #000000cc;
+}
+.readme-modal-header {
+  display: flex; align-items: center; padding: 12px 16px;
+  border-bottom: 1px solid var(--bdr); flex-shrink: 0;
+}
+.readme-modal-title { flex: 1; font-weight: 600; font-size: 14px; color: var(--txt); }
+.readme-modal-close {
+  background: none; border: none; color: var(--txt-m); font-size: 18px;
+  cursor: pointer; padding: 0 4px; line-height: 1; border-radius: 3px;
+}
+.readme-modal-close:hover { color: var(--txt); background: var(--bg-3); }
+.readme-modal-body { padding: 20px 24px; overflow-y: auto; flex: 1; }
+.readme-rendered { color: var(--txt); font-size: 13px; line-height: 1.65; }
+.readme-rendered h1, .readme-rendered h2, .readme-rendered h3,
+.readme-rendered h4, .readme-rendered h5, .readme-rendered h6 {
+  border-bottom: 1px solid var(--bdr-s); padding-bottom: 4px; margin: 20px 0 8px; color: var(--txt);
+}
+.readme-rendered h1 { font-size: 20px; } .readme-rendered h2 { font-size: 17px; } .readme-rendered h3 { font-size: 14px; }
+.readme-rendered p { margin: 8px 0; }
+.readme-rendered a { color: var(--blue-hi); }
+.readme-rendered code { background: var(--bg-2); padding: 2px 5px; border-radius: 3px; font-size: 12px; font-family: "SFMono-Regular", Consolas, monospace; }
+.readme-rendered pre { background: var(--bg-2); padding: 14px; border-radius: 6px; overflow-x: auto; margin: 10px 0; }
+.readme-rendered pre code { background: none; padding: 0; }
+.readme-rendered ul, .readme-rendered ol { padding-left: 22px; margin: 8px 0; }
+.readme-rendered li { margin: 3px 0; }
+.readme-rendered blockquote { border-left: 3px solid var(--bdr); padding-left: 14px; color: var(--txt-m); margin: 10px 0; }
+.readme-rendered img { max-width: 100%; border-radius: 4px; }
+.readme-rendered table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 12px; }
+.readme-rendered th, .readme-rendered td { border: 1px solid var(--bdr); padding: 6px 10px; }
+.readme-rendered th { background: var(--bg-2); }
+.readme-rendered hr { border: none; border-top: 1px solid var(--bdr); margin: 16px 0; }
+
+/* ── Sidebars ── */
+#sidebar-left.collapsed, #sidebar-right.collapsed {
+  width: 0; min-width: 0; overflow: hidden; border: none;
+}
+.sidebar-header {
+  padding: 12px 14px 10px;
+  font-weight: 600;
+  font-size: 13px;
+  border-bottom: 1px solid var(--bdr);
+  position: sticky; top: 0;
+  background: var(--bg-1);
+  z-index: 1;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.sidebar-collapse-btn {
+  background: none; border: none; color: var(--txt-m); cursor: pointer;
+  font-size: 14px; line-height: 1; padding: 2px 4px; border-radius: 3px;
+  flex-shrink: 0;
+}
+.sidebar-collapse-btn:hover { color: var(--txt); background: var(--bg-3); }
+
+/* Sidebar reveal buttons (shown when sidebar is collapsed) */
+.sidebar-reveal-btn {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  width: 20px; height: 48px; background: var(--bg-1); border: 1px solid var(--bdr);
+  color: var(--txt-m); cursor: pointer; font-size: 11px; z-index: 11;
+  display: none; align-items: center; justify-content: center;
+  padding: 0;
+}
+.sidebar-reveal-btn:hover { color: var(--txt); background: var(--bg-2); border-color: var(--blue-hi); }
+.sidebar-reveal-btn.left  { left: 0;  border-left: none; border-radius: 0 4px 4px 0; }
+.sidebar-reveal-btn.right { right: 0; border-right: none; border-radius: 4px 0 0 4px; }
+
+/* Zoom controls */
+#zoom-controls {
+  position: absolute; bottom: 40px; right: 12px;
+  display: flex; flex-direction: column; gap: 4px; z-index: 10;
+}
+.zoom-btn {
+  width: 28px; height: 28px; background: var(--bg-1); border: 1px solid var(--bdr);
+  color: var(--txt-m); cursor: pointer; font-size: 15px; border-radius: 5px;
+  display: flex; align-items: center; justify-content: center; padding: 0;
+  line-height: 1;
+}
+.zoom-btn:hover { color: var(--txt); background: var(--bg-2); border-color: var(--blue-hi); }
+.sidebar-section { padding: 10px 14px; border-bottom: 1px solid var(--bdr-s); }
+.sidebar-section-title { font-size: 11px; font-weight: 600; color: var(--txt-m); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; }
+
+/* Settings controls */
+.control-group { margin-bottom: 8px; }
+.control-label { font-size: 11px; color: var(--txt-m); margin-bottom: 5px; display: block; }
+.toggle-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.toggle-row label { font-size: 12px; color: var(--txt); cursor: pointer; }
+.toggle-switch {
+  position: relative; width: 30px; height: 16px; cursor: pointer;
+}
+.toggle-switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+.toggle-track {
+  position: absolute; inset: 0; background: var(--bdr); border-radius: 8px;
+  transition: background 0.2s;
+}
+.toggle-switch input:checked + .toggle-track { background: var(--blue); }
+.toggle-thumb {
+  position: absolute; top: 2px; left: 2px; width: 12px; height: 12px;
+  background: var(--txt); border-radius: 50%; transition: left 0.2s;
+}
+.toggle-switch input:checked ~ .toggle-thumb { left: 16px; }
+
+.section-expand-btn {
+  display: block; width: 100%; margin-bottom: 4px; padding: 4px 8px;
+  background: var(--bg-2); border: 1px solid var(--bdr); border-radius: 5px;
+  color: var(--txt); font-size: 11px; cursor: pointer; text-align: left;
+}
+.section-expand-btn:hover { background: var(--bg-3); border-color: var(--blue-hi); }
+.section-toggle-row { display: flex; gap: 4px; margin-bottom: 4px; }
+.section-toggle-row .section-expand-btn { flex: 1; margin-bottom: 0; text-align: center; }
+.toggle-3way {
+  position: relative; width: 46px; height: 16px; cursor: pointer; flex-shrink: 0;
+}
+.toggle-3way-track {
+  position: absolute; inset: 0; background: var(--bdr); border-radius: 8px; transition: background 0.2s;
+}
+.toggle-3way[data-value="public"] .toggle-3way-track,
+.toggle-3way[data-value="private"] .toggle-3way-track { background: var(--blue); }
+.toggle-3way-thumb {
+  position: absolute; top: 2px; left: 2px; width: 12px; height: 12px;
+  background: var(--txt); border-radius: 50%; transition: left 0.2s;
+}
+.toggle-3way[data-value="public"]  .toggle-3way-thumb { left: 17px; }
+.toggle-3way[data-value="private"] .toggle-3way-thumb { left: 32px; }
+
+/* Stats sidebar */
+.stat-number { font-size: 22px; font-weight: 700; color: var(--blue-hi); }
+.stat-total { font-size: 14px; font-weight: 400; color: var(--txt-m); }
+.stat-label { font-size: 11px; color: var(--txt-m); }
+.stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.stat-card { background: var(--bg); border-radius: 6px; padding: 8px; }
+
+.lang-stat-row { display: flex; align-items: center; gap: 6px; margin: 3px 0; font-size: 11px; }
+.lang-stat-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.lang-stat-name { flex: 1; color: var(--txt); }
+.lang-stat-val { color: var(--txt-m); }
+
+.dep-stat-row, .contrib-stat-row {
+  display: flex; align-items: center; gap: 6px; padding: 3px 4px;
+  border-radius: 4px; cursor: pointer; font-size: 11px;
+}
+.dep-stat-row:hover, .contrib-stat-row:hover { background: var(--bg-2); }
+.dep-stat-name { flex: 1; color: var(--txt); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dep-stat-count { font-size: 10px; color: var(--txt-m); }
+.contrib-stat-avatar { width: 18px; height: 18px; border-radius: 50%; }
+.contrib-stat-name { flex: 1; color: var(--txt); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.contrib-stat-count { font-size: 10px; color: var(--txt-m); }
+
+/* ── Loading / Error ── */
+#loading {
+  position: fixed; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; background: var(--bg); z-index: 100;
+  gap: 16px;
+}
+#contrib-stabilizing {
+  position: absolute; inset: 0; display: none; flex-direction: column;
+  align-items: center; justify-content: center; background: var(--bg-0); z-index: 20;
+  gap: 14px;
+}
+.spinner {
+  width: 36px; height: 36px; border: 3px solid var(--bdr);
+  border-top-color: var(--blue-hi); border-radius: 50%; animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading-text { color: var(--txt-m); font-size: 14px; }
+.error-box { background: var(--bg-err); border: 1px solid #da3633; border-radius: 8px; padding: 20px 28px; max-width: 480px; }
+.error-box h2 { color: #f85149; margin-bottom: 8px; }
+.error-box p { color: var(--txt-m); margin-bottom: 6px; line-height: 1.5; }
+.error-box code { background: var(--bg); padding: 1px 5px; border-radius: 3px; color: var(--txt); font-family: monospace; }
+
+/* Zoom hint */
+#zoom-hint {
+  position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
+  font-size: 11px; color: var(--txt-m); opacity: 0.33; pointer-events: none; white-space: nowrap;
+}
+
+/* ── Filter panel ── */
+.filter-panel-header {
+  display: flex; align-items: center; gap: 6px; cursor: pointer; padding-bottom: 6px;
+}
+.filter-panel-header:hover .sidebar-section-title { color: var(--txt); }
+.filter-active-badge {
+  background: var(--blue); color: #fff; font-size: 9px; font-weight: 700;
+  border-radius: 8px; padding: 1px 6px; line-height: 1.5;
+}
+.filter-chevron { font-size: 11px; color: var(--txt-m); margin-left: auto; transition: transform 0.15s; user-select: none; }
+.filter-panel-header.collapsed-hdr .filter-chevron { transform: rotate(-90deg); }
+#filter-body.hidden { display: none; }
+.filter-group { margin-bottom: 10px; }
+.filter-label { display: block; font-size: 10px; color: var(--txt-m); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.05em; }
+.filter-chips { display: flex; flex-wrap: wrap; gap: 3px; }
+.filter-footer { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--bdr-s); }
+.filter-status { font-size: 11px; color: var(--txt-m); }
+.filter-status .match-count { color: var(--blue-hi); font-weight: 600; }
+.filter-clear-btn {
+  padding: 3px 10px; background: none; border: 1px solid var(--bdr); border-radius: 4px;
+  color: var(--txt-m); font-size: 10px; cursor: pointer; font-family: inherit;
+}
+.filter-clear-btn:hover { color: var(--txt); border-color: var(--blue-hi); background: var(--bg-2); }
+
+.filter-input {
+  width: 100%; padding: 5px 8px; background: var(--bg-1); border: 1px solid var(--bdr);
+  border-radius: 5px; color: var(--txt); font-size: 12px; outline: none; font-family: inherit;
+}
+.filter-input:focus { border-color: var(--blue-hi); }
+.filter-input::placeholder { color: var(--txt-p); }
+.filter-year-row { display: flex; align-items: center; gap: 6px; }
+.filter-year-sep { font-size: 11px; color: var(--txt-m); flex-shrink: 0; }
+.filter-date { font-size: 11px; padding: 4px 6px; color-scheme: dark; }
+html.light .filter-date { color-scheme: light; }
+.filter-select {
+  flex: 1; padding: 4px 6px; background: var(--bg-1); border: 1px solid var(--bdr);
+  border-radius: 5px; color: var(--txt); font-size: 11px; outline: none; cursor: pointer; font-family: inherit;
+}
+.filter-select:focus { border-color: var(--blue-hi); }
+.filter-range-row { display: flex; align-items: center; gap: 6px; }
+.filter-range {
+  flex: 1; cursor: pointer; appearance: none; -webkit-appearance: none;
+  height: 3px; border-radius: 2px; background: var(--bg-3); outline: none;
+}
+.filter-range::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 10px; height: 10px; border-radius: 50%;
+  background: var(--thumb); border: 1px solid var(--thumb-bd); cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.filter-range::-webkit-slider-thumb:hover { background: var(--thumb-hv); border-color: var(--txt-m); }
+.filter-range::-moz-range-thumb {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--thumb); border: 1px solid var(--thumb-bd); cursor: pointer;
+}
+.filter-range-val { color: var(--txt-d); font-size: 10px; font-weight: 500; min-width: 30px; text-align: right; }
+
+/* Lang chips (used in popup) */
+.lang-chip {
+  display: flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 10px;
+  border: 1px solid var(--bdr); background: var(--bg); color: var(--txt-m);
+  font-size: 10px; cursor: pointer; transition: border-color 0.12s, color 0.12s, background 0.12s; white-space: nowrap;
+}
+.lang-chip:hover { border-color: var(--chip-color, var(--blue-hi)); color: var(--txt); }
+.lang-chip.active { background: var(--bg-2); border-color: var(--chip-color, var(--blue-hi)); color: var(--txt); }
+.lang-chip-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--chip-color, var(--txt-m)); flex-shrink: 0; }
+.contrib-chip-avatar { width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0; }
+
+/* Force layout collapsible */
+.collapsible-title {
+  display: flex; align-items: center; justify-content: space-between; cursor: pointer; user-select: none;
+}
+.collapsible-title:hover { color: var(--txt); }
+.collapsible-chevron { font-size: 11px; color: var(--txt-m); transition: transform 0.15s; }
+.collapsible-body { overflow: hidden; }
+.collapsible-body.closed { display: none; }
+
+/* Shared label for force panel */
+.force-label { display: flex; align-items: center; justify-content: space-between; font-size: 10px; color: var(--txt-d); margin-bottom: 3px; }
+.force-group { margin-bottom: 7px; }
+
+/* Theme toggle */
+#theme-toggle {
+  display: flex; align-items: center; gap: 6px; width: 100%; padding: 9px 14px;
+  background: none; border: none; border-top: 1px solid var(--bdr-s);
+  color: var(--txt-m); font-size: 11px; cursor: pointer; font-family: inherit;
+}
+#theme-toggle:hover { color: var(--txt); background: var(--bg-2); }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--bdr); border-radius: 3px; }
+
+/* ── View tabs ── */
+#view-tabs {
+  position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+  display: flex; gap: 2px; z-index: 10;
+  background: var(--bg-1); border: 1px solid var(--bdr); border-radius: 7px; padding: 3px;
+  box-shadow: 0 2px 8px #00000033;
+}
+.view-tab {
+  padding: 4px 18px; border: none; background: none; border-radius: 5px;
+  color: var(--txt-m); font-size: 12px; cursor: pointer; font-family: inherit;
+  transition: background 0.15s, color 0.15s; white-space: nowrap;
+}
+.view-tab:hover { color: var(--txt); background: var(--bg-2); }
+.view-tab.active { background: var(--bg-3); color: var(--txt); font-weight: 600; }
+
+/* ── Contributor node tile ── */
+.contrib-node {
+  position: absolute;
+  user-select: none;
+  will-change: transform;
+  cursor: pointer;
+  z-index: 1;
+}
+.contrib-node.dimmed { opacity: 0.12; }
+.contrib-node.highlighted { z-index: 5; }
+
+.cnode-pill {
+  display: flex;
+  align-items: center;
+  width: 40px;
+  height: 40px;
+  box-sizing: border-box;
+  border-radius: 20px;
+  background: var(--bg-1);
+  border: 2px solid var(--bdr);
+  overflow: hidden;
+  transition: width 0.2s ease, border-color 0.15s, box-shadow 0.15s;
+  cursor: grab;
+}
+.cnode-pill:active { cursor: grabbing; }
+.contrib-node:hover .cnode-pill { border-color: var(--blue-hi); box-shadow: 0 0 0 2px var(--blue-hid); }
+.contrib-node.highlighted .cnode-pill { border-color: var(--blue-hi); box-shadow: 0 0 12px var(--blue-hid); }
+.contrib-node.expanded .cnode-pill,
+.contrib-node.open .cnode-pill { width: 190px; }
+
+.cnode-avatar { width: 36px; height: 36px; border-radius: 50%; flex-shrink: 0; }
+
+.cnode-inline {
+  flex: 1;
+  min-width: 0;
+  max-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition: max-width 0.2s ease, opacity 0.15s;
+  padding: 0;
+}
+.contrib-node.expanded .cnode-inline,
+.contrib-node.open .cnode-inline { max-width: 150px; opacity: 1; padding: 0 8px; }
+.cnode-name { font-weight: 600; font-size: 11px; color: var(--blue-hi); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cnode-stats-small { font-size: 9px; color: var(--txt-m); white-space: nowrap; }
+
+.cnode-dropdown {
+  display: none;
+  position: absolute;
+  top: 20px;
+  left: 0;
+  width: 190px;
+  background: var(--bg-1);
+  border: 2px solid var(--bdr);
+  border-top: none;
+  border-radius: 0 0 12px 12px;
+  padding: 24px 10px 8px;
+  font-size: 10px;
+  color: var(--txt-m);
+  box-sizing: border-box;
+  z-index: -1;
+}
+.contrib-node.open .cnode-dropdown { display: block; }
+.cnode-section-label { font-size: 8px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--txt-m); margin-bottom: 3px; opacity: 0.7; }
+.cnode-lang-row { display: flex; align-items: center; gap: 5px; margin: 2px 0; }
+.cnode-lang-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; display: inline-block; }
+.cnode-lang-name { flex: 1; color: var(--txt); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cnode-lang-pct { font-size: 9px; color: var(--txt-m); }
+.cnode-repo-row { display: flex; align-items: center; gap: 5px; margin: 2px 0; }
+.cnode-repo-name { flex: 1; color: var(--txt); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+.cnode-repo-commits { font-size: 9px; color: var(--txt-m); white-space: nowrap; }
+
+/* ── Contributor edges ── */
+.contrib-edge { stroke: var(--blue-edge); fill: none; }
+.contrib-edge.highlighted { stroke: var(--blue-hi); }
+.contrib-edge.dimmed { opacity: 0.08; }
+</style>
+</head>
+<body>
+
+<div id="loading">
+  <div class="spinner"></div>
+  <div class="loading-text">Loading data.json…</div>
+</div>
+
+<div id="app" style="display:none">
+
+  <!-- Settings sidebar (left) -->
+  <aside id="sidebar-left">
+    <div class="sidebar-header">Settings <button class="sidebar-collapse-btn" onclick="toggleSidebar('left')" title="Hide sidebar">◀</button></div>
+
+    <!-- Filter panel -->
+    <div class="sidebar-section tab-section tab-repos" id="filter-panel">
+      <div class="filter-panel-header collapsed-hdr" onclick="toggleFilterPanel()">
+        <span class="sidebar-section-title" style="margin:0">Node filters</span>
+        <span id="filter-active-count" class="filter-active-badge" style="display:nonse"></span>
+        <span class="filter-chevron">▾</span>
+      </div>
+      <div id="filter-body" class="hidden">
+        <div class="filter-group">
+          <label class="filter-label">Name / description</label>
+          <input class="filter-input" id="filter-name" type="text" placeholder="Search repos…">
+        </div>
+        <div class="filter-group">
+          <label class="filter-label">Language</label>
+          <div class="filter-chips" id="filter-lang-chips"></div>
+        </div>
+        <div class="filter-group">
+          <label class="filter-label">Contributors</label>
+          <input class="filter-input" id="filter-contrib-search" type="text" placeholder="Search contributors…" style="margin-bottom:5px">
+          <div class="filter-chips" id="filter-contrib-chips" style="max-height:171px;overflow-y:auto;padding-right:2px"></div>
+        </div>
+        <div class="filter-group">
+          <label class="filter-label">Created date</label>
+          <div class="filter-year-row">
+            <input class="filter-input filter-date" type="date" id="filter-created-from" title="From">
+            <span class="filter-year-sep">–</span>
+            <input class="filter-input filter-date" type="date" id="filter-created-to" title="To">
+          </div>
+        </div>
+        <div class="filter-group">
+          <label class="filter-label">Last push since</label>
+          <input class="filter-input filter-date" type="date" id="filter-pushed-since">
+        </div>
+        <div class="filter-group">
+          <label class="filter-label">Min stars</label>
+          <div class="filter-range-row">
+            <input type="range" class="filter-range" id="filter-stars" min="0" value="0">
+            <span class="filter-range-val" id="filter-stars-val">0</span>
+          </div>
+        </div>
+        <div class="filter-footer">
+          <span id="filter-status" class="filter-status"></span>
+          <button class="filter-clear-btn" onclick="clearFilters()">Clear all</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="sidebar-section tab-section tab-repos">
+      <div class="sidebar-section-title">Node visibility</div>
+      <div class="toggle-row">
+        <label>Privacy <span id="privacy-val" style="color:var(--txt-d);font-weight:400">· all</span></label>
+        <div class="toggle-3way" id="toggle-privacy" data-value="all" onclick="cyclePrivacy()">
+          <div class="toggle-3way-track"></div>
+          <div class="toggle-3way-thumb"></div>
+        </div>
+      </div>
+      <div class="toggle-row">
+        <label for="toggle-archived">Archived</label>
+        <label class="toggle-switch">
+          <input type="checkbox" id="toggle-archived" checked onchange="applyVisibility()">
+          <div class="toggle-track"></div>
+          <div class="toggle-thumb"></div>
+        </label>
+      </div>
+      <div class="toggle-row">
+        <label for="toggle-forks">Forks</label>
+        <label class="toggle-switch">
+          <input type="checkbox" id="toggle-forks" checked onchange="applyVisibility()">
+          <div class="toggle-track"></div>
+          <div class="toggle-thumb"></div>
+        </label>
+      </div>
+      <div class="toggle-row">
+        <label for="toggle-orphans">Orphan nodes</label>
+        <label class="toggle-switch">
+          <input type="checkbox" id="toggle-orphans" checked onchange="applyVisibility()">
+          <div class="toggle-track"></div>
+          <div class="toggle-thumb"></div>
+        </label>
+      </div>
+      <div class="toggle-row">
+        <label for="toggle-contributed">Contributed repos</label>
+        <label class="toggle-switch">
+          <input type="checkbox" id="toggle-contributed" checked onchange="applyVisibility()">
+          <div class="toggle-track"></div>
+          <div class="toggle-thumb"></div>
+        </label>
+      </div>
+    </div>
+
+    <div class="sidebar-section tab-section tab-repos">
+      <div class="sidebar-section-title">Section visibility</div>
+      <div class="toggle-row">
+        <label for="toggle-sec-all">All</label>
+        <label class="toggle-switch">
+          <input type="checkbox" id="toggle-sec-all" onchange="applyAllSectionToggle(this.checked)">
+          <div class="toggle-track"></div>
+          <div class="toggle-thumb"></div>
+        </label>
+      </div>
+      <div class="toggle-row">
+        <label for="toggle-sec-created">📅 Created date</label>
+        <label class="toggle-switch">
+          <input type="checkbox" id="toggle-sec-created" onchange="setAllSection('created', this.checked)">
+          <div class="toggle-track"></div>
+          <div class="toggle-thumb"></div>
+        </label>
+      </div>
+      <div class="toggle-row">
+        <label for="toggle-sec-contributors">👥 Contributors</label>
+        <label class="toggle-switch">
+          <input type="checkbox" id="toggle-sec-contributors" onchange="setAllSection('contributors', this.checked)">
+          <div class="toggle-track"></div>
+          <div class="toggle-thumb"></div>
+        </label>
+      </div>
+      <div class="toggle-row">
+        <label for="toggle-sec-commits">📈 Commit frequency</label>
+        <label class="toggle-switch">
+          <input type="checkbox" id="toggle-sec-commits" onchange="setAllSection('commits', this.checked)">
+          <div class="toggle-track"></div>
+          <div class="toggle-thumb"></div>
+        </label>
+      </div>
+      <div class="toggle-row">
+        <label for="toggle-sec-languages">💻 Languages</label>
+        <label class="toggle-switch">
+          <input type="checkbox" id="toggle-sec-languages" onchange="setAllSection('languages', this.checked)">
+          <div class="toggle-track"></div>
+          <div class="toggle-thumb"></div>
+        </label>
+      </div>
+      <div class="toggle-row">
+        <label for="toggle-sec-dependencies">📦 Dependencies</label>
+        <label class="toggle-switch">
+          <input type="checkbox" id="toggle-sec-dependencies" onchange="setAllSection('dependencies', this.checked)">
+          <div class="toggle-track"></div>
+          <div class="toggle-thumb"></div>
+        </label>
+      </div>
+    </div>
+
+    <!-- Contributor filters -->
+    <div class="sidebar-section tab-section tab-contributors" style="display:none" id="contrib-filter-panel">
+      <div class="sidebar-section-title">Contributor filters</div>
+      <div class="filter-group">
+        <label class="filter-label">Name</label>
+        <input class="filter-input" id="cfilter-name" type="text" placeholder="Search contributors…">
+      </div>
+      <div class="filter-group">
+        <label class="filter-label">Min connections</label>
+        <div class="filter-range-row">
+          <input type="range" class="filter-range" id="cfilter-min-connections" min="0" max="20" value="0">
+          <span class="filter-range-val" id="cfilter-min-connections-val">0</span>
+        </div>
+      </div>
+      <div class="filter-footer">
+        <span id="cfilter-status" class="filter-status"></span>
+        <button class="filter-clear-btn" onclick="clearContributorFilters()">Clear</button>
+      </div>
+    </div>
+
+    <!-- Contributor visibility -->
+    <div class="sidebar-section tab-section tab-contributors" style="display:none">
+      <div class="sidebar-section-title">Node visibility</div>
+      <div class="toggle-row">
+        <label for="toggle-contrib-orphans">Isolated contributors</label>
+        <label class="toggle-switch">
+          <input type="checkbox" id="toggle-contrib-orphans" checked onchange="applyContributorFilters()">
+          <div class="toggle-track"></div>
+          <div class="toggle-thumb"></div>
+        </label>
+      </div>
+    </div>
+
+    <div style="margin-top:auto">
+      <div class="sidebar-section">
+        <div class="sidebar-section-title">Graph</div>
+        <div class="section-toggle-row">
+          <button class="section-expand-btn" onclick="resetLayout()">Reset layout</button>
+          <button class="section-expand-btn" onclick="resetView()">Reset view</button>
+        </div>
+      </div>
+
+      <!-- Layout parameters -->
+      <div class="sidebar-section">
+        <div class="sidebar-section-title collapsible-title" onclick="toggleForcePanel()" style="font-size:10px">
+          Force layout
+          <span class="collapsible-chevron" id="force-chevron" style="transform:rotate(-90deg)">▾</span>
+        </div>
+        <div class="collapsible-body closed" id="force-body">
+          <div class="force-group" style="margin-top:8px">
+            <label class="force-label">Disk tightness <span class="filter-range-val" id="lp-charge-val">20</span></label>
+            <div class="filter-range-row">
+              <input type="range" class="filter-range" id="lp-charge" min="0" max="100" value="20">
+            </div>
+          </div>
+          <div class="force-group">
+            <label class="force-label">Link strength <span class="filter-range-val" id="lp-attract-val">0.5</span></label>
+            <div class="filter-range-row">
+              <input type="range" class="filter-range" id="lp-attract" min="0" max="20" value="10">
+            </div>
+          </div>
+          <div class="force-group">
+            <label class="force-label">Link distance <span class="filter-range-val" id="lp-linkdist-val">380</span></label>
+            <div class="filter-range-row">
+              <input type="range" class="filter-range" id="lp-linkdist" min="50" max="500" step="10" value="380">
+            </div>
+          </div>
+          <div class="force-group">
+            <label class="force-label">Collision radius <span class="filter-range-val" id="lp-mindist-val">160</span></label>
+            <div class="filter-range-row">
+              <input type="range" class="filter-range" id="lp-mindist" min="50" max="500" step="10" value="160">
+            </div>
+          </div>
+          <button class="section-expand-btn" onclick="resetLayout()" style="margin-top:4px">Restart simulation</button>
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <div id="org-meta" style="font-size:11px; color:var(--txt-m); line-height:1.6;"></div>
+      </div>
+      <button id="theme-toggle" onclick="toggleTheme()">☀ Light mode</button>
+    </div>
+  </aside>
+
+  <!-- Graph -->
+  <div id="graph-container">
+    <div id="view-tabs">
+      <button class="view-tab active" data-tab="repos" onclick="switchTab('repos')">Repositories</button>
+      <button class="view-tab" data-tab="contributors" onclick="switchTab('contributors')">Contributors</button>
+    </div>
+    <svg id="edges-svg">
+      <defs>
+        <marker id="arrowhead" viewBox="0 -5 10 10" refX="12" refY="0" markerWidth="6" markerHeight="6" orient="auto">
+          <path d="M0,-5L10,0L0,5"/>
+        </marker>
+        <marker id="arrowhead-mid" viewBox="0 -5 10 10" refX="5" refY="0" markerWidth="6" markerHeight="6" orient="auto">
+          <path d="M0,-5L10,0L0,5"/>
+        </marker>
+        <marker id="arrowhead-hi" viewBox="0 -5 10 10" refX="12" refY="0" markerWidth="6" markerHeight="6" orient="auto">
+          <path d="M0,-5L10,0L0,5"/>
+        </marker>
+        <marker id="arrowhead-mid-hi" viewBox="0 -5 10 10" refX="5" refY="0" markerWidth="6" markerHeight="6" orient="auto">
+          <path d="M0,-5L10,0L0,5"/>
+        </marker>
+      </defs>
+      <g id="edges-group"></g>
+    </svg>
+    <div id="nodes-layer"></div>
+    <div id="contrib-stabilizing">
+      <div class="spinner"></div>
+      <div class="loading-text">Stabilizing layout…</div>
+    </div>
+    <button class="sidebar-reveal-btn left" id="reveal-left" onclick="toggleSidebar('left')" title="Show settings">▶</button>
+    <button class="sidebar-reveal-btn right" id="reveal-right" onclick="toggleSidebar('right')" title="Show stats">◀</button>
+    <div id="zoom-controls">
+      <button class="zoom-btn" onclick="zoomBy(1.25)" title="Zoom in">+</button>
+      <button class="zoom-btn" onclick="zoomBy(0.8)" title="Zoom out">−</button>
+      <button class="zoom-btn" onclick="fitView()" title="Zoom to fit" style="font-size:12px">⊞</button>
+      <button class="zoom-btn" onclick="resetView()" title="Reset view" style="font-size:12px">⊡</button>
+    </div>
+    <div id="zoom-hint">Scroll to zoom · Drag background to pan · Drag nodes to reposition</div>
+  </div>
+
+  <!-- README modal -->
+  <div id="readme-modal" onclick="if(event.target===this)closeReadmeModal()">
+    <div class="readme-modal-box">
+      <div class="readme-modal-header">
+        <span class="readme-modal-title" id="readme-modal-title"></span>
+        <button class="readme-modal-close" onclick="closeReadmeModal()" title="Close">✕</button>
+      </div>
+      <div class="readme-modal-body">
+        <div class="readme-rendered" id="readme-modal-content"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Stats sidebar (right) -->
+  <aside id="sidebar-right">
+    <div class="sidebar-header"><span>Stats — <span id="stats-org-name"></span></span><button class="sidebar-collapse-btn" onclick="toggleSidebar('right')" title="Hide sidebar">▶</button></div>
+
+    <!-- Repos tab stats -->
+    <div class="tab-section tab-repos">
+      <div class="sidebar-section">
+        <div class="stat-grid">
+          <div class="stat-card">
+            <div class="stat-number" id="stat-repos">–</div>
+            <div class="stat-label">repos</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-number" id="stat-contributors">–</div>
+            <div class="stat-label">contributors</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="sidebar-section-title">Languages</div>
+        <div id="stats-languages"></div>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="sidebar-section-title">Total commit activity (past year)</div>
+        <div id="stats-commits"></div>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="sidebar-section-title">External dependencies</div>
+        <div id="stats-deps"></div>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="sidebar-section-title">Contributors</div>
+        <div id="stats-contributors"></div>
+      </div>
+    </div>
+
+    <!-- Contributors tab stats -->
+    <div class="tab-section tab-contributors" style="display:none">
+      <div class="sidebar-section">
+        <div class="stat-grid">
+          <div class="stat-card">
+            <div class="stat-number" id="cstat-contributors">–</div>
+            <div class="stat-label">contributors</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-number" id="cstat-connections">–</div>
+            <div class="stat-label">connections</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="sidebar-section-title">Most connected</div>
+        <div id="cstats-top-contributors"></div>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="sidebar-section-title">Strongest pairs</div>
+        <div id="cstats-top-pairs"></div>
+      </div>
+    </div>
+  </aside>
+
+</div>
+
+<script>
+// ============================================================
+// Constants & state
+// ============================================================
+const NODE_WIDTH = 260;
+
+// GitHub language colors (subset)
+const LANG_COLORS = {
+  JavaScript:'#f1e05a', TypeScript:'#3178c6', Python:'#3572A5', Go:'#00ADD8',
+  Rust:'#dea584', Java:'#b07219', Ruby:'#701516', PHP:'#4F5D95', Swift:'#F05138',
+  Kotlin:'#A97BFF', C:'#555555', 'C++':'#f34b7d', 'C#':'#178600', HTML:'#e34c26',
+  CSS:'#563d7c', Shell:'#89e051', Vue:'#41b883', Dart:'#00B4AB', Scala:'#c22d40',
+  Elixir:'#6e4a7e', Haskell:'#5e5086', R:'#198ce7', MATLAB:'#e16737',
+};
+
+let DATA = null;         // full dataset
+let nodes = [];          // simulation nodes
+let links = [];          // simulation links
+let simulation = null;
+let vpTransform = { x: 0, y: 0, k: 1 };   // viewport pan/zoom
+let hoveredNodeId = null;
+let hoveredContribPair = null;  // { a, b } when a pair stat row is hovered
+let highlightedDepName = null;
+let highlightedContribLogin = null;
+let focusedNodeId = null;
+let focusMode = null;       // 'with-deps' | 'node-only'
+let _dragHappened = false;  // true if mouse moved during last node drag
+let dependentsMap = {};     // repoId -> [repoId, ...] that depend on it
+// When true, resetLayout fixes hidden nodes and excludes them from forces
+let currentForceValues = { charge: 20, attract: 0.5, linkDist: 380, collision: 160 };
+
+// ── Contributors graph state ──
+let activeTab = 'repos';
+const CONTRIB_NODE_WIDTH = 190;
+let contribNodes = [];
+let contribLinks = [];   // { source, target, weight }
+let contribSimulation = null;
+let contribEdgeEls = null;
+let contribInitialized = false;
+let contribStabilized = false;
+const contribFilterState = { name: '', minConnections: 0 };
+
+// ============================================================
+// Bootstrap
+// ============================================================
+fetch('data.json')
+  .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+  .then(data => {
+    DATA = data;
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('app').style.display = 'flex';
+    initGraph();
+    initStats();
+    initPanZoom();
+  })
+  .catch(err => {
+    document.getElementById('loading').innerHTML = `
+      <div class="error-box">
+        <h2>Could not load data.json</h2>
+        <p>Run the data fetcher first:</p>
+        <p><code>python fetch.py &lt;your-username&gt;</code></p>
+        <p style="margin-top:10px;font-size:11px">Error: ${err.message}</p>
+      </div>`;
+  });
+
+// ============================================================
+// Graph initialisation
+// ============================================================
+function initGraph() {
+  const container = document.getElementById('graph-container');
+  const W = container.clientWidth;
+  const H = container.clientHeight;
+
+  // Seeded RNG for reproducible layouts
+  const rng = d3.randomLcg(42);
+
+  // Build simulation node objects
+  nodes = DATA.repos.map(r => ({
+    ...r,
+    x: W / 2 + (rng() - 0.5) * Math.min(W, 600),
+    y: H / 2 + (rng() - 0.5) * Math.min(H, 400),
+  }));
+
+  const nodeById = new Map(nodes.map(n => [n.id, n]));
+
+  links = [];
+  dependentsMap = {};
+  for (const repo of DATA.repos) {
+    for (const dep of repo.dependencies.internal) {
+      if (nodeById.has(dep)) {
+        links.push({ source: repo.id, target: dep });
+        if (!dependentsMap[dep]) dependentsMap[dep] = [];
+        dependentsMap[dep].push(repo.id);
+      }
+    }
+  }
+
+  // Build simulation but don't start ticking yet
+  const W0 = document.getElementById('graph-container').clientWidth;
+  const H0 = document.getElementById('graph-container').clientHeight;
+  simulation = d3.forceSimulation(nodes)
+    .randomSource(d3.randomLcg(42))
+    .force('link',      d3.forceLink(links).id(d => d.id).distance(380).strength(0.5))
+    .force('charge',    d3.forceManyBody().strength(-300))
+    .force('collision', d3.forceCollide(160))
+    .force('x',         d3.forceX(W0 / 2).strength(0.1))
+    .force('y',         d3.forceY(H0 / 2).strength(0.1))
+    .stop();
+
+  // Pre-warm: run 300 ticks silently before first render
+  simulation.tick(300);
+
+  // Render at settled positions
+  renderEdges();
+  renderNodes();
+  onTick();
+
+  // Fit viewport to all nodes
+  fitView();
+
+  // Resume live animation
+  simulation.on('tick', onTick).restart();
+
+  // Sidebar meta
+  document.getElementById('org-meta').innerHTML =
+    `User: <strong style="color:var(--txt)">${DATA.user}</strong><br>
+     Generated: ${new Date(DATA.generated_at).toLocaleDateString()}`;
+
+  initFilterPanel();
+  initLayoutControls();
+}
+
+// ============================================================
+// Edge rendering
+// ============================================================
+let edgeEls = null;
+
+function renderEdges() {
+  const g = d3.select('#edges-group');
+  g.selectAll('*').remove();
+  edgeEls = g.selectAll('path')
+    .data(links)
+    .join('path')
+    .attr('class', 'edge')
+    .attr('marker-mid', 'url(#arrowhead-mid)')
+    .attr('marker-end', 'url(#arrowhead)');
+}
+
+// ============================================================
+// Node tile rendering
+// ============================================================
+function renderNodes() {
+  const layer = document.getElementById('nodes-layer');
+  layer.innerHTML = '';
+  for (const node of nodes) {
+    const el = createNodeEl(node);
+    layer.appendChild(el);
+    setupNodeInteraction(el, node);
+  }
+}
+
+function createNodeEl(node) {
+  const el = document.createElement('div');
+  el.className = node.type === 'contributed' ? 'repo-node contributed' : 'repo-node';
+  el.id = `node-${CSS.escape(node.id)}`;
+
+  const badges = [
+    node.is_archived        ? '<span class="badge archived">archived</span>'             : '',
+    node.is_private         ? '<span class="badge private">private</span>'               : '',
+    node.is_fork            ? '<span class="badge fork">fork</span>'                     : '',
+    node.type === 'contributed' ? '<span class="badge contributed">contributed</span>'   : '',
+  ].join('');
+
+  el.innerHTML = `
+    <div class="node-header" data-node="${node.id}">
+      <div class="node-title">
+        <div class="repo-name"><a href="${node.url}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${esc(node.name)}</a></div>
+        ${badges ? `<div class="node-badges">${badges}</div>` : ''}
+      </div>
+      <span class="repo-stars">★ ${node.stars}</span>
+    </div>
+    <div class="node-desc">
+      <span style="flex:1">${esc((node.description || '').substring(0, 90))}</span>
+      ${node.readme ? '<button class="readme-expand-btn">README</button>' : ''}
+    </div>
+    <div class="node-sections collapsed">
+      ${buildSection(node, 'created',      '📅 Created')}
+      ${buildSection(node, 'contributors', '👥 Contributors')}
+      ${buildSection(node, 'commits',      '📈 Commit activity')}
+      ${buildSection(node, 'languages',    '💻 Languages')}
+      ${buildSection(node, 'dependencies', '📦 Dependencies')}
+    </div>
+    <button class="details-toggle" data-node="${node.id}">▼ Details</button>
+  `;
+
+  // Details toggle
+  el.querySelector('.details-toggle').addEventListener('click', e => {
+    e.stopPropagation();
+    toggleDetails(node.id);
+  });
+
+  // Section headers
+  el.querySelectorAll('.section-header').forEach(hdr => {
+    hdr.addEventListener('click', e => {
+      e.stopPropagation();
+      toggleSection(hdr.closest('.section'));
+    });
+  });
+
+  // README expand button
+  const readmeBtn = el.querySelector('.readme-expand-btn');
+  if (readmeBtn) {
+    readmeBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      openReadmeModal(node);
+    });
+  }
+
+  return el;
+}
+
+function buildSection(node, key, label) {
+  return `
+    <div class="section" data-key="${key}" data-node="${node.id}">
+      <div class="section-header">
+        <span class="label">${label}</span>
+        <span class="section-arrow">▶</span>
+      </div>
+      <div class="section-body">${getSectionContent(node, key)}</div>
+    </div>`;
+}
+
+function getSectionContent(node, key) {
+  switch (key) {
+    case 'created': {
+      const d = node.created_at ? new Date(node.created_at).toLocaleDateString('en-US', {year:'numeric',month:'long',day:'numeric'}) : 'Unknown';
+      const u = node.pushed_at ? new Date(node.pushed_at).toLocaleDateString('en-US', {year:'numeric',month:'long',day:'numeric'}) : '–';
+      return `<div class="created-date">Created: ${d}<br>Last push: ${u}</div>`;
+    }
+    case 'contributors': {
+      if (!node.contributors.length) return '<em style="color:var(--txt-m)">No contributor data</em>';
+      const rows = node.contributors.map(c => `
+        <div class="contributor">
+          <img class="contrib-avatar" src="${c.avatar_url}" alt="${esc(c.login)}" loading="lazy">
+          <span class="contrib-name"><a href="${c.profile_url}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">${esc(c.login)}</a></span>
+          <span class="contrib-stats">${c.commit_count} commits${c.pr_count ? ` · ${c.pr_count} PRs` : ''}</span>
+        </div>`).join('');
+      return `<div class="contributors-scroll">${rows}</div>`;
+    }
+    case 'commits': {
+      const data = node.commit_frequency || Array(52).fill(0);
+      return `<div class="sparkline-wrap">${sparkline(data, 238, 36)}</div>
+              <div style="font-size:10px;color:var(--txt-m);margin-top:2px">Past 52 weeks</div>`;
+    }
+    case 'languages': {
+      const langs = node.languages || {};
+      const total = Object.values(langs).reduce((a, b) => a + b, 0);
+      if (!total) return '<em style="color:var(--txt-m)">No language data</em>';
+      return Object.entries(langs)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 8)
+        .map(([lang, bytes]) => {
+          const pct = (bytes / total * 100).toFixed(1);
+          const color = LANG_COLORS[lang] || '#8b949e';
+          return `<div class="lang-row">
+            <div class="lang-dot" style="background:${color}"></div>
+            <span class="lang-name">${esc(lang)}</span>
+            <div class="lang-bar-track"><div class="lang-bar-fill" style="width:${pct}%;background:${color}"></div></div>
+            <span class="lang-pct">${pct}%</span>
+          </div>`;
+        }).join('');
+    }
+    case 'dependencies': {
+      const internal  = node.dependencies.internal || [];
+      const external  = node.dependencies.external || [];
+      const dependents = dependentsMap[node.id] || [];
+      let html = '';
+      if (dependents.length) {
+        html += `<div class="dep-section-label">Dependents (${dependents.length})</div>
+                 <div class="dep-list">${dependents.map(d => `<span class="dep-tag internal">${esc(d)}</span>`).join('')}</div>`;
+      }
+      if (internal.length) {
+        html += `<div class="dep-section-label" style="margin-top:${dependents.length?'6px':'0'}">Dependencies (${internal.length})</div>
+                 <div class="dep-list">${internal.map(d => `<span class="dep-tag internal">${esc(d)}</span>`).join('')}</div>`;
+      }
+      if (external.length) {
+        html += `<div class="dep-section-label" style="margin-top:${(dependents.length||internal.length)?'6px':'0'}">External (${external.length})</div>
+                 <div class="dep-list">${external.slice(0, 40).map(d => `<span class="dep-tag">${esc(d)}</span>`).join('')}</div>`;
+      }
+      return html || '<em style="color:var(--txt-m)">No dependencies detected</em>';
+    }
+    case 'readme': {
+      if (!node.readme) return '<em style="color:var(--txt-m)">No README</em>';
+      const preview = esc(node.readme.substring(0, 200));
+      const hasMore = node.readme.length > 200;
+      return `<div class="readme-preview">${preview}${hasMore ? '…' : ''}</div>
+              <button class="readme-expand-btn">View full README</button>`;
+    }
+  }
+  return '';
+}
+
+function toggleSection(sectionEl) {
+  sectionEl.classList.toggle('open');
+  // When a section is opened, make it visible even if details are collapsed
+  if (sectionEl.classList.contains('open')) {
+    sectionEl.style.display = '';
+  }
+}
+
+function toggleDetails(nodeId) {
+  const el = document.getElementById(`node-${CSS.escape(nodeId)}`);
+  const sectionsEl = el.querySelector('.node-sections');
+  const btn = el.querySelector('.details-toggle');
+  const isCollapsed = sectionsEl.classList.contains('collapsed');
+
+  if (isCollapsed) {
+    sectionsEl.classList.remove('collapsed');
+    btn.textContent = '▲ Details';
+    // Show all sections
+    el.querySelectorAll('.section').forEach(s => s.style.display = '');
+  } else {
+    sectionsEl.classList.add('collapsed');
+    btn.textContent = '▼ Details';
+    // Hide non-open sections (open ones stay visible)
+    el.querySelectorAll('.section:not(.open)').forEach(s => s.style.display = 'none');
+  }
+}
+
+// ============================================================
+// Filter panel
+// ============================================================
+const filterState = { name: '', langs: new Set(), contributors: new Set(), createdFrom: '', createdTo: '', pushedSince: '', minStars: 0 };
+
+function initFilterPanel() {
+  // Language chips — sorted by total usage across repos
+  const langTotals = {};
+  DATA.repos.forEach(r => Object.entries(r.languages || {}).forEach(([l, b]) => {
+    langTotals[l] = (langTotals[l] || 0) + b;
+  }));
+  const sortedLangs = Object.entries(langTotals).sort((a, b) => b[1] - a[1]).map(([l]) => l);
+  const chipsEl = document.getElementById('filter-lang-chips');
+  sortedLangs.forEach(lang => {
+    const color = LANG_COLORS[lang] || '#8b949e';
+    const chip = document.createElement('div');
+    chip.className = 'lang-chip';
+    chip.dataset.lang = lang;
+    chip.style.setProperty('--chip-color', color);
+    chip.innerHTML = `<div class="lang-chip-dot"></div>${esc(lang)}`;
+    chip.addEventListener('click', () => {
+      if (filterState.langs.has(lang)) {
+        filterState.langs.delete(lang);
+        chip.classList.remove('active');
+      } else {
+        filterState.langs.add(lang);
+        chip.classList.add('active');
+      }
+      applyFilters();
+    });
+    chipsEl.appendChild(chip);
+  });
+
+  // Set date input min/max bounds from data
+  const dates = DATA.repos.map(r => r.created_at ? r.created_at.slice(0, 10) : null).filter(Boolean);
+  const minDate = dates.reduce((a, b) => a < b ? a : b);
+  const maxDate = new Date().toISOString().slice(0, 10);
+  ['filter-created-from', 'filter-created-to', 'filter-pushed-since'].forEach(id => {
+    document.getElementById(id).min = minDate;
+    document.getElementById(id).max = maxDate;
+  });
+
+  // Stars slider
+  const maxStars = Math.max(...DATA.repos.map(r => r.stars || 0), 1);
+  const starsInput = document.getElementById('filter-stars');
+  starsInput.max = maxStars;
+
+  // Contributor chips — sorted by total commits across all repos
+  const contribTotals = {};
+  const contribMeta = {};
+  DATA.repos.forEach(r => r.contributors.forEach(c => {
+    contribTotals[c.login] = (contribTotals[c.login] || 0) + c.commit_count;
+    contribMeta[c.login] = c;
+  }));
+  const sortedContribs = Object.entries(contribTotals).sort((a, b) => b[1] - a[1]).map(([l]) => l);
+  const contribChipsEl = document.getElementById('filter-contrib-chips');
+  sortedContribs.forEach(login => {
+    const meta = contribMeta[login] || {};
+    const chip = document.createElement('div');
+    chip.className = 'lang-chip';
+    chip.dataset.login = login;
+    chip.innerHTML = `<img class="contrib-chip-avatar" src="${meta.avatar_url || ''}" alt="${esc(login)}" loading="lazy">${esc(login)}`;
+    chip.addEventListener('click', () => {
+      if (filterState.contributors.has(login)) {
+        filterState.contributors.delete(login);
+        chip.classList.remove('active');
+      } else {
+        filterState.contributors.add(login);
+        chip.classList.add('active');
+      }
+      applyFilters();
+    });
+    contribChipsEl.appendChild(chip);
+  });
+
+  // Search input filters visible chips only
+  document.getElementById('filter-contrib-search').addEventListener('input', e => {
+    const q = e.target.value.trim().toLowerCase();
+    contribChipsEl.querySelectorAll('.lang-chip').forEach(chip => {
+      chip.style.display = (!q || chip.dataset.login.toLowerCase().includes(q)) ? '' : 'none';
+    });
+  });
+
+  document.getElementById('filter-name').addEventListener('input', applyFilters);
+  document.getElementById('filter-created-from').addEventListener('change', applyFilters);
+  document.getElementById('filter-created-to').addEventListener('change', applyFilters);
+  document.getElementById('filter-pushed-since').addEventListener('change', applyFilters);
+  starsInput.addEventListener('input', () => {
+    document.getElementById('filter-stars-val').textContent = starsInput.value;
+    applyFilters();
+  });
+
+  applyFilters();
+}
+
+function applyFilters() {
+  filterState.name        = (document.getElementById('filter-name').value || '').trim().toLowerCase();
+  filterState.createdFrom = document.getElementById('filter-created-from').value;
+  filterState.createdTo   = document.getElementById('filter-created-to').value;
+  filterState.pushedSince = document.getElementById('filter-pushed-since').value;
+  filterState.minStars    = parseInt(document.getElementById('filter-stars').value) || 0;
+
+  let matchCount = 0;
+  for (const node of nodes) {
+    node._filteredOut = !nodeMatchesFilters(node);
+    if (!node._filteredOut) matchCount++;
+  }
+
+  document.getElementById('filter-status').innerHTML =
+    `<span class="match-count">${matchCount}</span> / ${nodes.length} repos`;
+
+  const active = countActiveFilters();
+  const badge = document.getElementById('filter-active-count');
+  badge.textContent = active;
+  badge.style.display = active > 0 ? '' : 'none';
+
+  const prevHidden = new Set(nodes.filter(n => n._hidden).map(n => n.id));
+
+  applyVisibility();
+
+  const visibilityChanged = nodes.some(n => n._hidden !== prevHidden.has(n.id));
+  if (visibilityChanged) {
+    nodes.forEach(n => { if (n._hidden) { n.fx = n.x; n.fy = n.y; } else { n.fx = null; n.fy = null; } });
+    applyForces();
+    simulation.alpha(1).restart();
+  }
+}
+
+function nodeMatchesFilters(node) {
+  const { name, langs, contributors, createdFrom, createdTo, pushedSince, minStars } = filterState;
+  if (name) {
+    const hay = ((node.name || '') + ' ' + (node.description || '')).toLowerCase();
+    if (!hay.includes(name)) return false;
+  }
+  if (langs.size > 0) {
+    if (!Object.keys(node.languages || {}).some(l => langs.has(l))) return false;
+  }
+  if (contributors.size > 0) {
+    if (!(node.contributors || []).some(c => contributors.has(c.login))) return false;
+  }
+  const created = node.created_at ? node.created_at.slice(0, 10) : null;
+  if (createdFrom && (!created || created < createdFrom)) return false;
+  if (createdTo   && (!created || created > createdTo))   return false;
+  const pushed = node.pushed_at ? node.pushed_at.slice(0, 10) : null;
+  if (pushedSince && (!pushed || pushed < pushedSince)) return false;
+  if (minStars > 0 && (node.stars || 0) < minStars) return false;
+  return true;
+}
+
+function countActiveFilters() {
+  let c = 0;
+  if (filterState.name) c++;
+  if (filterState.langs.size > 0) c++;
+  if (filterState.contributors.size > 0) c++;
+  if (filterState.createdFrom || filterState.createdTo) c++;
+  if (filterState.pushedSince) c++;
+  if (filterState.minStars > 0) c++;
+  return c;
+}
+
+function clearFilters() {
+  document.getElementById('filter-name').value = '';
+  document.getElementById('filter-contrib-search').value = '';
+  filterState.contributors.clear();
+  document.querySelectorAll('#filter-contrib-chips .lang-chip.active').forEach(c => c.classList.remove('active'));
+  document.querySelectorAll('#filter-contrib-chips .lang-chip').forEach(c => c.style.display = '');
+  document.getElementById('filter-created-from').value = '';
+  document.getElementById('filter-created-to').value = '';
+  document.getElementById('filter-pushed-since').value = '';
+  const starsInput = document.getElementById('filter-stars');
+  starsInput.value = 0;
+  document.getElementById('filter-stars-val').textContent = '0';
+  filterState.langs.clear();
+  document.querySelectorAll('.lang-chip.active').forEach(c => c.classList.remove('active'));
+  applyFilters();
+}
+
+function toggleFilterPanel() {
+  const body = document.getElementById('filter-body');
+  const hdr  = document.querySelector('.filter-panel-header');
+  body.classList.toggle('hidden');
+  hdr.classList.toggle('collapsed-hdr');
+}
+
+function toggleForcePanel() {
+  const body    = document.getElementById('force-body');
+  const chevron = document.getElementById('force-chevron');
+  const closed  = body.classList.toggle('closed');
+  chevron.style.transform = closed ? 'rotate(-90deg)' : '';
+}
+
+// ============================================================
+// Layout parameter controls
+// ============================================================
+function initLayoutControls() {
+  const wire = (id, valId, toValue, fmt, apply) => {
+    const input = document.getElementById(id);
+    const valEl = document.getElementById(valId);
+    input.addEventListener('input', () => {
+      const v = toValue(parseFloat(input.value));
+      valEl.textContent = fmt(v);
+      apply(v);
+      simulation.alpha(0.4).restart();
+    });
+  };
+
+  wire('lp-charge', 'lp-charge-val',
+    raw => raw, v => v,
+    v => { currentForceValues.charge = v; applyForces(); }
+  );
+  wire('lp-attract', 'lp-attract-val',
+    raw => +(raw / 20).toFixed(2), v => v.toFixed(2),
+    v => { currentForceValues.attract = v; applyForces(); }
+  );
+  wire('lp-linkdist', 'lp-linkdist-val',
+    raw => raw, v => v,
+    v => { currentForceValues.linkDist = v; applyForces(); }
+  );
+  wire('lp-mindist', 'lp-mindist-val',
+    raw => raw, v => v,
+    v => { currentForceValues.collision = v; applyForces(); }
+  );
+}
+
+// ============================================================
+// Settings actions
+// ============================================================
+const ALL_SECTION_KEYS = ['created', 'contributors', 'commits', 'languages', 'dependencies'];
+
+function setAllSection(key, open) {
+  document.querySelectorAll(`.section[data-key="${key}"]`).forEach(s => {
+    s.classList.toggle('open', open);
+    if (open) s.style.display = '';
+  });
+}
+
+function applyAllSectionToggle(open) {
+  ALL_SECTION_KEYS.forEach(k => {
+    const input = document.getElementById(`toggle-sec-${k}`);
+    if (input) input.checked = open;
+    setAllSection(k, open);
+  });
+}
+
+function toggleSidebar(side) {
+  const sidebar = document.getElementById(`sidebar-${side}`);
+  const revealBtn = document.getElementById(`reveal-${side}`);
+  const isCollapsed = sidebar.classList.contains('collapsed');
+  sidebar.classList.toggle('collapsed', !isCollapsed);
+  revealBtn.style.display = isCollapsed ? 'none' : 'flex';
+}
+
+function cyclePrivacy() {
+  const el = document.getElementById('toggle-privacy');
+  const cycle = ['all', 'public', 'private'];
+  const next = cycle[(cycle.indexOf(el.dataset.value) + 1) % 3];
+  el.dataset.value = next;
+  document.getElementById('privacy-val').textContent = '· ' + next;
+  applyVisibility();
+}
+
+function applyVisibility() {
+  const showOrphans     = document.getElementById('toggle-orphans').checked;
+  const showArchived    = document.getElementById('toggle-archived').checked;
+  const showForks       = document.getElementById('toggle-forks').checked;
+  const showContributed = document.getElementById('toggle-contributed')?.checked ?? true;
+  const privacy         = document.getElementById('toggle-privacy')?.dataset.value || 'all';
+
+  const hasIncoming = new Set(links.map(l => typeof l.target === 'object' ? l.target.id : l.target));
+  const hasOutgoing = new Set(links.map(l => typeof l.source === 'object' ? l.source.id : l.source));
+
+  for (const node of nodes) {
+    const incoming = hasIncoming.has(node.id);
+    const outgoing = hasOutgoing.has(node.id);
+    const isOrphan = !incoming && !outgoing;
+
+    let visible = true;
+    if (isOrphan && !showOrphans) visible = false;
+    if (!showArchived && node.is_archived) visible = false;
+    if (!showForks && node.is_fork) visible = false;
+    if (!showContributed && node.type === 'contributed') visible = false;
+    if (privacy === 'public' && node.is_private) visible = false;
+    if (privacy === 'private' && !node.is_private) visible = false;
+    if (node._filteredOut) visible = false;
+
+    node._hidden = !visible;
+    const el = document.getElementById(`node-${CSS.escape(node.id)}`);
+    if (el) el.style.display = visible ? '' : 'none';
+  }
+
+  updateEdgeVisibility();
+  updateStats();
+}
+
+function updateEdgeVisibility() {
+  if (!edgeEls) return;
+  edgeEls.style('display', d => {
+    const s = typeof d.source === 'object' ? d.source : nodes.find(n => n.id === d.source);
+    const t = typeof d.target === 'object' ? d.target : nodes.find(n => n.id === d.target);
+    return (s && s._hidden) || (t && t._hidden) ? 'none' : '';
+  });
+}
+
+function applyForces() {
+  const { charge, attract, linkDist, collision } = currentForceValues;
+  const container = document.getElementById('graph-container');
+  const cx = container.clientWidth / 2, cy = container.clientHeight / 2;
+
+  simulation.force('charge').strength(n => n._hidden ? 0 : -300);
+  simulation.force('link').strength(l => {
+    const sh = typeof l.source === 'object' ? l.source._hidden : false;
+    const th = typeof l.target === 'object' ? l.target._hidden : false;
+    return (sh || th) ? 0 : attract;
+  });
+  simulation.force('collision').radius(n => n._hidden ? 0 : collision);
+  simulation.force('x').x(cx).strength(n => n._hidden ? 0 : charge / 200);
+  simulation.force('y').y(cy).strength(n => n._hidden ? 0 : charge / 200);
+
+  simulation.force('link').distance(linkDist);
+}
+
+function toggleTheme() {
+  const isLight = document.documentElement.classList.toggle('light');
+  document.getElementById('theme-toggle').textContent = isLight ? '☾ Dark mode' : '☀ Light mode';
+}
+
+function resetLayout() {
+  if (activeTab === 'contributors') { resetContributorLayout(); return; }
+  const container = document.getElementById('graph-container');
+  const W = container.clientWidth;
+  const H = container.clientHeight;
+  const rng = d3.randomLcg(42);
+  nodes.forEach(n => {
+    if (n._hidden) {
+      n.fx = n.x; n.fy = n.y;
+    } else {
+      n.fx = null; n.fy = null;
+      n.x = W / 2 + (rng() - 0.5) * Math.min(W, 600);
+      n.y = H / 2 + (rng() - 0.5) * Math.min(H, 400);
+      n.vx = 0; n.vy = 0;
+    }
+  });
+  applyForces();
+  simulation.alpha(1).restart();
+}
+
+function resetView() {
+  fitView();
+}
+
+function fitView() {
+  if (activeTab === 'contributors') { fitViewContrib(); return; }
+
+  const container = document.getElementById('graph-container');
+  const W = container.clientWidth;
+  const H = container.clientHeight;
+  const pad = 80;
+
+  const visible = nodes.filter(n => !n._hidden);
+  if (!visible.length) return;
+  const xs = visible.map(n => n.x);
+  const ys = visible.map(n => n.y);
+  const minX = Math.min(...xs) - NODE_WIDTH / 2;
+  const maxX = Math.max(...xs) + NODE_WIDTH / 2;
+  const minY = Math.min(...ys) - 60;
+  const maxY = Math.max(...ys) + 120;
+
+  const gW = maxX - minX;
+  const gH = maxY - minY;
+  const k  = Math.min((W - pad * 2) / gW, (H - pad * 2) / gH);
+
+  vpTransform.k = k;
+  vpTransform.x = W / 2 - (minX + gW / 2) * k;
+  vpTransform.y = H / 2 - (minY + gH / 2) * k;
+  applyVpTransform();
+}
+
+function fitToNodes(nodeList, pad = 80) {
+  const container = document.getElementById('graph-container');
+  const W = container.clientWidth;
+  const H = container.clientHeight;
+  if (!nodeList.length) return;
+  const xs = nodeList.map(n => n.x);
+  const ys = nodeList.map(n => n.y);
+  const minX = Math.min(...xs) - NODE_WIDTH / 2;
+  const maxX = Math.max(...xs) + NODE_WIDTH / 2;
+  const minY = Math.min(...ys) - 60;
+  const maxY = Math.max(...ys) + 120;
+  const gW = maxX - minX;
+  const gH = maxY - minY;
+  const k = Math.min((W - pad * 2) / gW, (H - pad * 2) / gH, 2);
+  vpTransform.k = k;
+  vpTransform.x = W / 2 - (minX + gW / 2) * k;
+  vpTransform.y = H / 2 - (minY + gH / 2) * k;
+  applyVpTransform();
+}
+
+function focusOnNode(nodeId, mode) {
+  focusedNodeId = nodeId;
+  focusMode = mode;
+  const node = nodes.find(n => n.id === nodeId);
+  if (!node) return;
+  let targetNodes;
+  if (mode === 'node-only') {
+    targetNodes = [node];
+  } else {
+    const relatedIds = new Set([nodeId]);
+    links.forEach(l => {
+      const sid = typeof l.source === 'object' ? l.source.id : l.source;
+      const tid = typeof l.target === 'object' ? l.target.id : l.target;
+      if (sid === nodeId) relatedIds.add(tid);
+      if (tid === nodeId) relatedIds.add(sid);
+    });
+    targetNodes = nodes.filter(n => relatedIds.has(n.id) && !n._hidden);
+  }
+  fitToNodes(targetNodes);
+}
+
+function zoomBy(factor) {
+  const container = document.getElementById('graph-container');
+  const cx = container.clientWidth / 2;
+  const cy = container.clientHeight / 2;
+  const newK = Math.max(0.15, Math.min(3, vpTransform.k * factor));
+  vpTransform.x = cx - (cx - vpTransform.x) * (newK / vpTransform.k);
+  vpTransform.y = cy - (cy - vpTransform.y) * (newK / vpTransform.k);
+  vpTransform.k = newK;
+  applyVpTransform();
+}
+
+// ============================================================
+// Hover / highlight
+// ============================================================
+function setupNodeInteraction(el, node) {
+  // Hover
+  el.addEventListener('mouseenter', () => {
+    hoveredNodeId = node.id;
+    applyHighlight();
+  });
+  el.addEventListener('mouseleave', () => {
+    hoveredNodeId = null;
+    applyHighlight();
+  });
+
+  // Drag + click/dblclick (on header only)
+  const header = el.querySelector('.node-header');
+  header.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    startNodeDrag(e, node, el);
+  });
+
+  let _clickTimer = null;
+  header.addEventListener('click', e => {
+    e.stopPropagation();
+    if (_dragHappened) return;
+    if (_clickTimer) { clearTimeout(_clickTimer); _clickTimer = null; }
+    _clickTimer = setTimeout(() => {
+      _clickTimer = null;
+      focusOnNode(node.id, 'with-deps');
+    }, 220);
+  });
+  header.addEventListener('dblclick', e => {
+    e.stopPropagation();
+    if (_clickTimer) { clearTimeout(_clickTimer); _clickTimer = null; }
+    if (focusedNodeId === node.id) {
+      focusOnNode(node.id, focusMode === 'with-deps' ? 'node-only' : 'with-deps');
+    } else {
+      focusOnNode(node.id, 'with-deps');
+    }
+  });
+}
+
+function applyHighlight() {
+  const activeNodeId   = hoveredNodeId;
+  const activeDepName  = highlightedDepName;
+  const activeContrib  = highlightedContribLogin;
+
+  if (!activeNodeId && !activeDepName && !activeContrib) {
+    // No highlight — clear everything
+    document.querySelectorAll('.repo-node').forEach(el => {
+      el.classList.remove('dimmed', 'highlighted');
+    });
+    edgeEls && edgeEls.classed('dimmed', false).classed('highlighted', false)
+                      .attr('marker-end', 'url(#arrowhead)')
+                      .attr('marker-mid', 'url(#arrowhead-mid)');
+    return;
+  }
+
+  let relatedIds = new Set();
+
+  if (activeNodeId) {
+    relatedIds.add(activeNodeId);
+    // Add nodes connected by edges
+    links.forEach(l => {
+      const sid = typeof l.source === 'object' ? l.source.id : l.source;
+      const tid = typeof l.target === 'object' ? l.target.id : l.target;
+      if (sid === activeNodeId) relatedIds.add(tid);
+      if (tid === activeNodeId) relatedIds.add(sid);
+    });
+  }
+
+  if (activeDepName) {
+    DATA.repos.forEach(r => {
+      if (r.dependencies.external.includes(activeDepName) ||
+          r.dependencies.internal.includes(activeDepName)) {
+        relatedIds.add(r.id);
+      }
+    });
+  }
+
+  if (activeContrib) {
+    DATA.repos.forEach(r => {
+      if (r.contributors.some(c => c.login === activeContrib)) {
+        relatedIds.add(r.id);
+      }
+    });
+  }
+
+  document.querySelectorAll('.repo-node').forEach(el => {
+    const nid = el.dataset ? el.id.replace('node-', '') : null;
+    // find the actual node id
+    const nodeId = el.id.startsWith('node-') ? el.id.slice(5) : null;
+    if (!nodeId) return;
+    const isRelated = relatedIds.has(nodeId);
+    el.classList.toggle('dimmed', !isRelated);
+    el.classList.toggle('highlighted', isRelated && nodeId === activeNodeId);
+  });
+
+  edgeEls && edgeEls
+    .classed('dimmed', d => {
+      const sid = typeof d.source === 'object' ? d.source.id : d.source;
+      const tid = typeof d.target === 'object' ? d.target.id : d.target;
+      return !relatedIds.has(sid) || !relatedIds.has(tid);
+    })
+    .classed('highlighted', d => {
+      const sid = typeof d.source === 'object' ? d.source.id : d.source;
+      const tid = typeof d.target === 'object' ? d.target.id : d.target;
+      // Star pattern: only edges incident to the directly active node
+      return activeNodeId
+        ? (sid === activeNodeId || tid === activeNodeId)
+        : (relatedIds.has(sid) && relatedIds.has(tid));
+    })
+    .attr('marker-end', d => {
+      const sid = typeof d.source === 'object' ? d.source.id : d.source;
+      const tid = typeof d.target === 'object' ? d.target.id : d.target;
+      const hi = activeNodeId
+        ? (sid === activeNodeId || tid === activeNodeId)
+        : (relatedIds.has(sid) && relatedIds.has(tid));
+      return hi ? 'url(#arrowhead-hi)' : 'url(#arrowhead)';
+    })
+    .attr('marker-mid', d => {
+      const sid = typeof d.source === 'object' ? d.source.id : d.source;
+      const tid = typeof d.target === 'object' ? d.target.id : d.target;
+      const hi = activeNodeId
+        ? (sid === activeNodeId || tid === activeNodeId)
+        : (relatedIds.has(sid) && relatedIds.has(tid));
+      return hi ? 'url(#arrowhead-mid-hi)' : 'url(#arrowhead-mid)';
+    });
+}
+
+// ============================================================
+// Node drag
+// ============================================================
+function startNodeDrag(e, node, el) {
+  const container = document.getElementById('graph-container');
+  const rect = container.getBoundingClientRect();
+
+  // Convert screen coords to graph coords
+  const toGraph = (cx, cy) => ({
+    x: (cx - rect.left - vpTransform.x) / vpTransform.k,
+    y: (cy - rect.top  - vpTransform.y) / vpTransform.k,
+  });
+
+  const startGraph = toGraph(e.clientX, e.clientY);
+  const origX = node.x;
+  const origY = node.y;
+
+  _dragHappened = false;
+  simulation.alphaTarget(0.2).restart();
+  node.fx = node.x;
+  node.fy = node.y;
+
+  const onMove = mv => {
+    const dx = mv.clientX - e.clientX;
+    const dy = mv.clientY - e.clientY;
+    if (Math.sqrt(dx * dx + dy * dy) > 5) _dragHappened = true;
+    const g = toGraph(mv.clientX, mv.clientY);
+    node.fx = origX + (g.x - startGraph.x);
+    node.fy = origY + (g.y - startGraph.y);
+  };
+
+  const onUp = () => {
+    simulation.alphaTarget(0);
+    node.fx = node.x;
+    node.fy = node.y;
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+  };
+
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
+// ============================================================
+// Pan & Zoom
+// ============================================================
+function initPanZoom() {
+  const container = document.getElementById('graph-container');
+
+  // Zoom (wheel)
+  container.addEventListener('wheel', e => {
+    e.preventDefault();
+    const rect = container.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const delta = e.deltaY > 0 ? 0.85 : 1.18;
+    const newK = Math.max(0.15, Math.min(3, vpTransform.k * delta));
+    vpTransform.x = mx - (mx - vpTransform.x) * (newK / vpTransform.k);
+    vpTransform.y = my - (my - vpTransform.y) * (newK / vpTransform.k);
+    vpTransform.k = newK;
+    applyVpTransform();
+  }, { passive: false });
+
+  // Pan (drag on background)
+  let panStart = null;
+  container.addEventListener('mousedown', e => {
+    if (e.target !== container &&
+        !e.target.closest('#edges-svg') &&
+        e.target.id !== 'nodes-layer') return;
+    e.preventDefault();
+    panStart = { x: e.clientX - vpTransform.x, y: e.clientY - vpTransform.y };
+    container.classList.add('panning');
+  });
+  document.addEventListener('mousemove', e => {
+    if (!panStart) return;
+    vpTransform.x = e.clientX - panStart.x;
+    vpTransform.y = e.clientY - panStart.y;
+    applyVpTransform();
+  });
+  document.addEventListener('mouseup', () => {
+    if (panStart) {
+      panStart = null;
+      document.getElementById('graph-container').classList.remove('panning');
+    }
+  });
+}
+
+const _REPAINT_THRESHOLDS = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0];
+let _lastRepaintThresh = -1;
+
+function applyVpTransform() {
+  const t = `translate(${vpTransform.x}px, ${vpTransform.y}px) scale(${vpTransform.k})`;
+  document.getElementById('edges-svg').style.transform = t;
+  document.getElementById('nodes-layer').style.transform = t;
+
+  // Force re-rasterization of compositor layers when zoom crosses a threshold,
+  // preventing blurry text and images at high magnification.
+  let thresh = 0;
+  for (let i = 0; i < _REPAINT_THRESHOLDS.length; i++) {
+    if (vpTransform.k >= _REPAINT_THRESHOLDS[i]) thresh = i + 1;
+  }
+  if (thresh !== _lastRepaintThresh) {
+    _lastRepaintThresh = thresh;
+    const layer = document.getElementById('nodes-layer');
+    requestAnimationFrame(() => {
+      layer.style.opacity = '0.9999';
+      requestAnimationFrame(() => { layer.style.opacity = ''; });
+    });
+  }
+}
+
+// The SVG needs to be big enough in local coords; override its dimensions
+// so the transform works correctly.
+function patchSvgSize() {
+  const svg = document.getElementById('edges-svg');
+  svg.setAttribute('width', '100%');
+  svg.setAttribute('height', '100%');
+}
+
+// ============================================================
+// Tick handler
+// ============================================================
+function onTick() {
+  if (edgeEls) {
+    edgeEls.attr('d', d => {
+      const x1 = d.source.x, y1 = d.source.y;
+      const x2 = d.target.x, y2 = d.target.y;
+      const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+      return `M${x1},${y1}L${mx},${my}L${x2},${y2}`;
+    });
+  }
+
+  nodes.forEach(n => {
+    const el = document.getElementById(`node-${CSS.escape(n.id)}`);
+    if (el) {
+      el.style.transform = `translate(${n.x - NODE_WIDTH / 2}px, ${n.y - 50}px)`;
+    }
+  });
+}
+
+// ============================================================
+// Stats sidebar
+// ============================================================
+function initStats() {
+  document.getElementById('stats-org-name').textContent = DATA.user;
+  updateStats();
+}
+
+function updateStats() {
+  const total   = nodes.length;
+  const visible = nodes.filter(n => !n._hidden);
+  const repos   = visible.map(n => DATA.repos.find(r => r.id === n.id)).filter(Boolean);
+
+  // Counters
+  const reposEl = document.getElementById('stat-repos');
+  reposEl.innerHTML = visible.length < total
+    ? `${visible.length}<span class="stat-total"> /${total}</span>`
+    : `${total}`;
+
+  const visContribs = new Set(repos.flatMap(r => r.contributors.map(c => c.login)));
+  const allContribs = new Set(DATA.repos.flatMap(r => r.contributors.map(c => c.login)));
+  const contribsEl  = document.getElementById('stat-contributors');
+  contribsEl.innerHTML = visContribs.size < allContribs.size
+    ? `${visContribs.size}<span class="stat-total"> /${allContribs.size}</span>`
+    : `${allContribs.size}`;
+
+  // Languages
+  const langTotals = {};
+  repos.forEach(r => Object.entries(r.languages || {}).forEach(([l, b]) => {
+    langTotals[l] = (langTotals[l] || 0) + b;
+  }));
+  const totalBytes = Object.values(langTotals).reduce((a, b) => a + b, 0);
+  const topLangs = Object.entries(langTotals).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  document.getElementById('stats-languages').innerHTML = topLangs.map(([lang, bytes]) => {
+    const color = LANG_COLORS[lang] || '#8b949e';
+    const kb = bytes > 1e6 ? `${(bytes/1e6).toFixed(1)}M` : bytes > 1e3 ? `${(bytes/1e3).toFixed(0)}K` : `${bytes}`;
+    const pct = (bytes / totalBytes * 100).toFixed(1);
+    return `<div class="lang-stat-row">
+      <div class="lang-stat-dot" style="background:${color}"></div>
+      <span class="lang-stat-name">${esc(lang)}</span>
+      <span class="lang-stat-val">${pct}% (${kb}B)</span>
+    </div>`;
+  }).join('');
+
+  // Commit frequency aggregate
+  const weeklyTotals = Array(52).fill(0);
+  repos.forEach(r => (r.commit_frequency || []).forEach((v, i) => { weeklyTotals[i] = (weeklyTotals[i] || 0) + v; }));
+  document.getElementById('stats-commits').innerHTML =
+    `<div class="sparkline-wrap">${sparkline(weeklyTotals, 228, 40)}</div>
+     <div style="font-size:10px;color:var(--txt-m);margin-top:2px">Past 52 weeks · ${weeklyTotals.reduce((a,b)=>a+b,0)} total commits</div>`;
+
+  // External deps
+  const depCounts = {};
+  repos.forEach(r => (r.dependencies.external || []).forEach(d => {
+    depCounts[d] = (depCounts[d] || 0) + 1;
+  }));
+  const topDeps = Object.entries(depCounts).filter(([,c]) => c > 1).sort((a,b)=>b[1]-a[1]).slice(0, 15);
+  document.getElementById('stats-deps').innerHTML = topDeps.map(([dep, count]) => `
+    <div class="dep-stat-row"
+         onmouseenter="setHighlightDep('${esc(dep)}')"
+         onmouseleave="setHighlightDep(null)">
+      <span class="dep-stat-name">${esc(dep)}</span>
+      <span class="dep-stat-count">${count} repos</span>
+    </div>`).join('') || '<em style="color:var(--txt-m);font-size:11px">No shared dependencies found</em>';
+
+  // Contributors — sum per-repo commit/PR counts (each is scoped to that repo, so total is org-wide)
+  const contribTotals = {};
+  const contribMeta = {};
+  repos.forEach(r => r.contributors.forEach(c => {
+    if (!contribTotals[c.login]) contribTotals[c.login] = { commits: 0, prs: 0 };
+    contribTotals[c.login].commits += c.commit_count || 0;
+    contribTotals[c.login].prs    += c.pr_count    || 0;
+    contribMeta[c.login] = c;
+  }));
+  const topContribs = Object.entries(contribTotals).sort((a,b)=>b[1].commits-a[1].commits).slice(0, 12);
+  document.getElementById('stats-contributors').innerHTML = topContribs.map(([login, { commits, prs }]) => {
+    const meta = contribMeta[login] || {};
+    const detail = [
+      `${commits} commit${commits !== 1 ? 's' : ''}`,
+      prs ? `${prs} PR${prs !== 1 ? 's' : ''}` : null,
+    ].filter(Boolean).join(' · ');
+    return `<div class="contrib-stat-row"
+         onmouseenter="setHighlightContrib('${esc(login)}')"
+         onmouseleave="setHighlightContrib(null)">
+      <img class="contrib-stat-avatar" src="${meta.avatar_url || ''}" alt="${esc(login)}" loading="lazy">
+      <span class="contrib-stat-name">${esc(login)}</span>
+      <span class="contrib-stat-count">${detail}</span>
+    </div>`;
+  }).join('');
+}
+
+let _sidebarHoverTimer;
+function setHighlightDep(name) {
+  clearTimeout(_sidebarHoverTimer);
+  if (name === null) { highlightedDepName = null; applyHighlight(); return; }
+  highlightedDepName = name; applyHighlight();
+}
+
+function setHighlightContrib(login) {
+  clearTimeout(_sidebarHoverTimer);
+  if (login === null) { highlightedContribLogin = null; applyHighlight(); return; }
+  highlightedContribLogin = login; applyHighlight();
+}
+
+function esc(str) {
+  return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ============================================================
+// README modal
+// ============================================================
+function openReadmeModal(node) {
+  document.getElementById('readme-modal-title').textContent = node.name + ' — README';
+  const content = document.getElementById('readme-modal-content');
+  if (typeof marked !== 'undefined') {
+    content.innerHTML = marked.parse(node.readme || '');
+  } else {
+    content.textContent = node.readme || '';
+  }
+  document.getElementById('readme-modal').classList.add('open');
+}
+
+function closeReadmeModal() {
+  document.getElementById('readme-modal').classList.remove('open');
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeReadmeModal();
+});
+
+// ============================================================
+// Utilities
+// ============================================================
+// ============================================================
+// Tab switching
+// ============================================================
+function switchTab(tab) {
+  if (tab === activeTab) return;
+  activeTab = tab;
+
+  document.querySelectorAll('.view-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.tab === tab);
+  });
+  document.querySelectorAll('.tab-section').forEach(s => {
+    s.style.display = s.classList.contains(`tab-${tab}`) ? '' : 'none';
+  });
+
+  if (tab === 'contributors') {
+    if (simulation) simulation.stop();
+    document.getElementById('nodes-layer').innerHTML = '';
+    d3.select('#edges-group').selectAll('*').remove();
+    edgeEls = null;
+    initContributorsGraph();
+  } else {
+    if (contribSimulation) contribSimulation.stop();
+    document.getElementById('contrib-stabilizing').style.display = 'none';
+    document.getElementById('nodes-layer').innerHTML = '';
+    d3.select('#edges-group').selectAll('*').remove();
+    contribEdgeEls = null;
+    renderEdges();
+    renderNodes();
+    onTick();
+    fitView();
+    simulation.on('tick', onTick).restart();
+    updateStats();
+  }
+}
+
+// ============================================================
+// Contributors graph
+// ============================================================
+function buildContributorData() {
+  const contribMap = {};
+  DATA.repos.forEach(repo => {
+    repo.contributors.forEach(c => {
+      if (!contribMap[c.login]) {
+        contribMap[c.login] = {
+          id: c.login, login: c.login,
+          avatar_url: c.avatar_url, profile_url: c.profile_url,
+          repos: [], repoDetails: [], totalCommits: 0, totalPRs: 0,
+          languages: {},
+        };
+      }
+      const cm = contribMap[c.login];
+      cm.repos.push(repo.id);
+      cm.repoDetails.push({ id: repo.id, commits: c.commit_count || 0, prs: c.pr_count || 0 });
+      cm.totalCommits += c.commit_count || 0;
+      cm.totalPRs += c.pr_count || 0;
+      if (repo.languages) {
+        Object.entries(repo.languages).forEach(([lang, bytes]) => {
+          cm.languages[lang] = (cm.languages[lang] || 0) + bytes;
+        });
+      }
+    });
+  });
+  return Object.values(contribMap);
+}
+
+function buildContributorLinks(contribList) {
+  const linkMap = {};
+  DATA.repos.forEach(repo => {
+    const logins = repo.contributors.map(c => c.login);
+    for (let i = 0; i < logins.length; i++) {
+      for (let j = i + 1; j < logins.length; j++) {
+        const a = logins[i], b = logins[j];
+        const key = a < b ? `${a}|||${b}` : `${b}|||${a}`;
+        linkMap[key] = (linkMap[key] || 0) + 1;
+      }
+    }
+  });
+  return Object.entries(linkMap).map(([key, weight]) => {
+    const [source, target] = key.split('|||');
+    return { source, target, weight };
+  });
+}
+
+function findContribComponents(nodes, links) {
+  const parent = Object.fromEntries(nodes.map(n => [n.id, n.id]));
+  const find = id => { if (parent[id] !== id) parent[id] = find(parent[id]); return parent[id]; };
+  links.forEach(l => { parent[find(l.source)] = find(l.target); });
+  const groups = {};
+  nodes.forEach(n => { const root = find(n.id); (groups[root] = groups[root] || []).push(n); });
+  return Object.values(groups);
+}
+
+function initContributorsGraph() {
+  const container = document.getElementById('graph-container');
+  const W = container.clientWidth;
+  const H = container.clientHeight;
+
+  if (!contribInitialized) {
+    const contribData = buildContributorData();
+    contribLinks = buildContributorLinks(contribData);
+
+    // Degree of each contributor (number of co-contributor edges)
+    const degree = {};
+    contribLinks.forEach(l => {
+      degree[l.source] = (degree[l.source] || 0) + 1;
+      degree[l.target] = (degree[l.target] || 0) + 1;
+    });
+
+    // Connected components, largest first
+    const components = findContribComponents(contribData, contribLinks)
+      .sort((a, b) => b.length - a.length);
+
+    // Golden angle Fibonacci spiral: one spiral per component.
+    // Largest component is centred at the viewport centre; subsequent components
+    // are placed outward along their own golden-angle positions.
+    const PHI = Math.PI * (3 - Math.sqrt(5)); // ≈ 137.508°
+    const nodeSpacing = 55;   // radial scale within a component
+    const compGap = nodeSpacing * 2;
+    const posMap = {};
+    let nodesSoFar = 0;
+
+    components.forEach((comp, ci) => {
+      let cx, cy;
+      if (ci === 0) {
+        cx = W / 2; cy = H / 2;
+      } else {
+        // Place this component's centre far enough to avoid overlap with all preceding spirals
+        const r = nodeSpacing * (Math.sqrt(nodesSoFar) + Math.sqrt(comp.length)) + compGap;
+        cx = W / 2 + r * Math.cos(ci * PHI);
+        cy = H / 2 + r * Math.sin(ci * PHI);
+      }
+      nodesSoFar += comp.length;
+
+      // Within the component: most-connected node at centre, rest spiral outward
+      [...comp]
+        .sort((a, b) => (degree[b.id] || 0) - (degree[a.id] || 0))
+        .forEach((node, i) => {
+          posMap[node.id] = {
+            x: cx + nodeSpacing * Math.sqrt(i) * Math.cos(i * PHI),
+            y: cy + nodeSpacing * Math.sqrt(i) * Math.sin(i * PHI),
+          };
+        });
+    });
+
+    contribNodes = contribData.map(c => ({ ...c, ...posMap[c.id] }));
+
+    contribSimulation = d3.forceSimulation(contribNodes)
+      .randomSource(d3.randomLcg(99))
+      .alphaDecay(0.06)
+      .force('link', d3.forceLink(contribLinks).id(d => d.id)
+        .distance(180)
+        .strength(d => Math.min(d.weight / 5, 0.6)))
+      .force('charge', d3.forceManyBody().strength(-180))
+      .force('collision', d3.forceCollide(32))
+      .stop();
+
+    contribInitialized = true;
+  }
+
+  // Synchronously tick to a stable layout — instant (~10ms), no visible physics chaos.
+  // alphaDecay=0.06 means ~120 ticks reach alphaMin; tick 200 to be safe.
+  if (!contribStabilized) {
+    contribSimulation.tick(200);
+    contribStabilized = true;
+  }
+
+  renderContributorEdges();
+  renderContributorNodes();
+  onContribTick();
+  fitViewContrib();
+
+  // Fade the overlay out to reveal the already-stable graph
+  const overlay = document.getElementById('contrib-stabilizing');
+  overlay.style.display = 'flex';
+  overlay.style.opacity = '1';
+  overlay.style.transition = '';
+  requestAnimationFrame(() => {
+    overlay.style.transition = 'opacity 0.5s ease';
+    overlay.style.opacity = '0';
+    setTimeout(() => { overlay.style.display = 'none'; overlay.style.opacity = ''; overlay.style.transition = ''; }, 520);
+  });
+
+  contribSimulation.on('tick', onContribTick).on('end', null).restart();
+
+  initContributorFilterPanel();
+  applyContributorFilters();
+}
+
+function renderContributorEdges() {
+  const g = d3.select('#edges-group');
+  g.selectAll('*').remove();
+  contribEdgeEls = g.selectAll('line')
+    .data(contribLinks)
+    .join('line')
+    .attr('class', 'contrib-edge')
+    .attr('stroke-width', d => Math.max(0.5, Math.sqrt(d.weight) * 1.5));
+}
+
+function renderContributorNodes() {
+  const layer = document.getElementById('nodes-layer');
+  layer.innerHTML = '';
+  for (const node of contribNodes) {
+    const el = createContributorNodeEl(node);
+    layer.appendChild(el);
+    setupContributorNodeInteraction(el, node);
+  }
+}
+
+function createContributorNodeEl(node) {
+  const el = document.createElement('div');
+  el.className = 'contrib-node';
+  el.id = `cnode-${CSS.escape(node.id)}`;
+
+  // Top repos by commit count
+  const topRepos = [...(node.repoDetails || [])].sort((a, b) => b.commits - a.commits).slice(0, 5);
+  const repoRows = topRepos.map(r =>
+    `<div class="cnode-repo-row"><span class="cnode-repo-name">${esc(r.id)}</span><span class="cnode-repo-commits">${r.commits}c</span></div>`
+  ).join('');
+
+  // Top languages by bytes
+  const langEntries = Object.entries(node.languages || {}).sort((a, b) => b[1] - a[1]).slice(0, 4);
+  const totalBytes = langEntries.reduce((s, [, b]) => s + b, 0);
+  const langRows = langEntries.map(([lang, bytes]) => {
+    const pct = Math.round(bytes / totalBytes * 100);
+    const color = LANG_COLORS[lang] || '#8b949e';
+    return `<div class="cnode-lang-row"><span class="cnode-lang-dot" style="background:${color}"></span><span class="cnode-lang-name">${esc(lang)}</span><span class="cnode-lang-pct">${pct}%</span></div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="cnode-pill">
+      <img class="cnode-avatar" src="${esc(node.avatar_url || '')}" alt="${esc(node.login)}" loading="lazy">
+      <div class="cnode-inline">
+        <div class="cnode-name"><a href="${esc(node.profile_url || '#')}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="color:inherit;text-decoration:none">${esc(node.login)}</a></div>
+        <div class="cnode-stats-small">${node.repos.length} repo${node.repos.length !== 1 ? 's' : ''} · ${node.totalCommits} commits</div>
+      </div>
+    </div>
+    <div class="cnode-dropdown">
+      ${langRows ? `<div class="cnode-section-label">Languages</div>${langRows}` : ''}
+      ${repoRows ? `<div class="cnode-section-label" style="margin-top:6px">Top repos</div>${repoRows}` : ''}
+    </div>
+  `;
+  return el;
+}
+
+function setupContributorNodeInteraction(el, node) {
+  el.addEventListener('mouseenter', () => {
+    hoveredNodeId = node.id;
+    el.classList.add('expanded');
+    applyContributorHighlight();
+  });
+  el.addEventListener('mouseleave', () => {
+    hoveredNodeId = null;
+    el.classList.remove('expanded', 'open');
+    applyContributorHighlight();
+  });
+
+  const pill = el.querySelector('.cnode-pill');
+  pill.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    startContributorNodeDrag(e, node);
+  });
+  pill.addEventListener('click', e => {
+    if (_dragHappened) { _dragHappened = false; return; }
+    e.stopPropagation();
+    el.classList.toggle('open');
+  });
+
+  // Prevent dropdown clicks from bubbling to the graph pan handler
+  const dropdown = el.querySelector('.cnode-dropdown');
+  if (dropdown) dropdown.addEventListener('mousedown', e => e.stopPropagation());
+}
+
+function applyContributorHighlight() {
+  const activeId = hoveredNodeId;
+  const pair = hoveredContribPair;
+
+  if (!activeId && !pair) {
+    document.querySelectorAll('.contrib-node').forEach(el => el.classList.remove('dimmed', 'highlighted'));
+    contribEdgeEls && contribEdgeEls.classed('dimmed', false).classed('highlighted', false);
+    return;
+  }
+
+  if (pair) {
+    // Pair mode: highlight only the two nodes and their single connecting edge
+    const { a, b } = pair;
+    document.querySelectorAll('.contrib-node').forEach(el => {
+      const nodeId = el.id.startsWith('cnode-') ? el.id.slice(6) : null;
+      if (!nodeId) return;
+      el.classList.toggle('dimmed', nodeId !== a && nodeId !== b);
+      el.classList.toggle('highlighted', nodeId === a || nodeId === b);
+    });
+    contribEdgeEls && contribEdgeEls
+      .classed('dimmed', d => {
+        const sid = typeof d.source === 'object' ? d.source.id : d.source;
+        const tid = typeof d.target === 'object' ? d.target.id : d.target;
+        return !((sid === a && tid === b) || (sid === b && tid === a));
+      })
+      .classed('highlighted', d => {
+        const sid = typeof d.source === 'object' ? d.source.id : d.source;
+        const tid = typeof d.target === 'object' ? d.target.id : d.target;
+        return (sid === a && tid === b) || (sid === b && tid === a);
+      });
+    return;
+  }
+
+  // Single-node star mode: highlight node + neighbors, only edges incident to activeId
+  const relatedIds = new Set([activeId]);
+  contribLinks.forEach(l => {
+    const sid = typeof l.source === 'object' ? l.source.id : l.source;
+    const tid = typeof l.target === 'object' ? l.target.id : l.target;
+    if (sid === activeId) relatedIds.add(tid);
+    if (tid === activeId) relatedIds.add(sid);
+  });
+
+  document.querySelectorAll('.contrib-node').forEach(el => {
+    const nodeId = el.id.startsWith('cnode-') ? el.id.slice(6) : null;
+    if (!nodeId) return;
+    el.classList.toggle('dimmed', !relatedIds.has(nodeId));
+    el.classList.toggle('highlighted', nodeId === activeId);
+  });
+
+  contribEdgeEls && contribEdgeEls
+    .classed('dimmed', d => {
+      const sid = typeof d.source === 'object' ? d.source.id : d.source;
+      const tid = typeof d.target === 'object' ? d.target.id : d.target;
+      return sid !== activeId && tid !== activeId;
+    })
+    .classed('highlighted', d => {
+      const sid = typeof d.source === 'object' ? d.source.id : d.source;
+      const tid = typeof d.target === 'object' ? d.target.id : d.target;
+      return sid === activeId || tid === activeId;
+    });
+}
+
+function setContribGraphHover(login) {
+  hoveredNodeId = login;
+  hoveredContribPair = null;
+  applyContributorHighlight();
+}
+
+function clearContribGraphHover() {
+  hoveredNodeId = null;
+  hoveredContribPair = null;
+  applyContributorHighlight();
+}
+
+function setContribPairHover(a, b) {
+  hoveredNodeId = null;
+  hoveredContribPair = { a, b };
+  applyContributorHighlight();
+}
+
+function startContributorNodeDrag(e, node) {
+  const container = document.getElementById('graph-container');
+  const rect = container.getBoundingClientRect();
+  const toGraph = (cx, cy) => ({
+    x: (cx - rect.left - vpTransform.x) / vpTransform.k,
+    y: (cy - rect.top  - vpTransform.y) / vpTransform.k,
+  });
+
+  const startGraph = toGraph(e.clientX, e.clientY);
+  const origX = node.x, origY = node.y;
+  _dragHappened = false;
+  contribSimulation.alphaTarget(0.2).restart();
+  node.fx = node.x; node.fy = node.y;
+
+  const onMove = mv => {
+    const dx = mv.clientX - e.clientX, dy = mv.clientY - e.clientY;
+    if (Math.sqrt(dx * dx + dy * dy) > 5) _dragHappened = true;
+    const g = toGraph(mv.clientX, mv.clientY);
+    node.fx = origX + (g.x - startGraph.x);
+    node.fy = origY + (g.y - startGraph.y);
+  };
+  const onUp = () => {
+    contribSimulation.alphaTarget(0);
+    node.fx = node.x; node.fy = node.y;
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+  };
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
+function onContribTick() {
+  if (contribEdgeEls) {
+    contribEdgeEls
+      .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+      .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+  }
+  contribNodes.forEach(n => {
+    const el = document.getElementById(`cnode-${CSS.escape(n.id)}`);
+    if (el) el.style.transform = `translate(${n.x - 20}px, ${n.y - 20}px)`;
+  });
+}
+
+function fitViewContrib() {
+  const container = document.getElementById('graph-container');
+  const W = container.clientWidth, H = container.clientHeight, pad = 80;
+  const visible = contribNodes.filter(n => !n._hidden);
+  if (!visible.length) return;
+  const xs = visible.map(n => n.x), ys = visible.map(n => n.y);
+  const minX = Math.min(...xs) - 20;
+  const maxX = Math.max(...xs) + 20;
+  const minY = Math.min(...ys) - 20, maxY = Math.max(...ys) + 20;
+  const gW = maxX - minX, gH = maxY - minY;
+  const k = Math.min((W - pad * 2) / gW, (H - pad * 2) / gH, 3);
+  vpTransform.k = k;
+  vpTransform.x = W / 2 - (minX + gW / 2) * k;
+  vpTransform.y = H / 2 - (minY + gH / 2) * k;
+  applyVpTransform();
+}
+
+function resetContributorLayout() {
+  const container = document.getElementById('graph-container');
+  const W = container.clientWidth, H = container.clientHeight;
+  const rng = d3.randomLcg(99);
+  contribNodes.forEach(n => {
+    if (n._hidden) { n.fx = n.x; n.fy = n.y; }
+    else { n.fx = null; n.fy = null; n.x = W/2+(rng()-0.5)*Math.min(W,600); n.y = H/2+(rng()-0.5)*Math.min(H,400); n.vx=0; n.vy=0; }
+  });
+  contribSimulation.alpha(1).restart();
+}
+
+// ============================================================
+// Contributor filters
+// ============================================================
+let _contribFilterInit = false;
+
+function initContributorFilterPanel() {
+  if (_contribFilterInit) return;
+  _contribFilterInit = true;
+  document.getElementById('cfilter-name').addEventListener('input', applyContributorFilters);
+  document.getElementById('cfilter-min-connections').addEventListener('input', () => {
+    const v = document.getElementById('cfilter-min-connections').value;
+    document.getElementById('cfilter-min-connections-val').textContent = v;
+    applyContributorFilters();
+  });
+}
+
+function applyContributorFilters() {
+  if (!contribNodes.length) return;
+  contribFilterState.name = (document.getElementById('cfilter-name')?.value || '').trim().toLowerCase();
+  contribFilterState.minConnections = parseInt(document.getElementById('cfilter-min-connections')?.value) || 0;
+  const showOrphans = document.getElementById('toggle-contrib-orphans')?.checked ?? true;
+
+  // Compute degree
+  const degree = {};
+  contribNodes.forEach(n => { degree[n.id] = 0; });
+  contribLinks.forEach(l => {
+    const sid = typeof l.source === 'object' ? l.source.id : l.source;
+    const tid = typeof l.target === 'object' ? l.target.id : l.target;
+    degree[sid] = (degree[sid] || 0) + 1;
+    degree[tid] = (degree[tid] || 0) + 1;
+  });
+
+  let matchCount = 0;
+  for (const node of contribNodes) {
+    const nameMatch = !contribFilterState.name || node.login.toLowerCase().includes(contribFilterState.name);
+    const connMatch = (degree[node.id] || 0) >= contribFilterState.minConnections;
+    const orphanOk = showOrphans || (degree[node.id] || 0) > 0;
+    node._hidden = !(nameMatch && connMatch && orphanOk);
+    const el = document.getElementById(`cnode-${CSS.escape(node.id)}`);
+    if (el) el.style.display = node._hidden ? 'none' : '';
+    if (!node._hidden) matchCount++;
+  }
+
+  const statusEl = document.getElementById('cfilter-status');
+  if (statusEl) statusEl.innerHTML = `<span class="match-count">${matchCount}</span> / ${contribNodes.length} contributors`;
+
+  // Update edge visibility
+  if (contribEdgeEls) {
+    contribEdgeEls.style('display', d => {
+      const s = typeof d.source === 'object' ? d.source : contribNodes.find(n => n.id === d.source);
+      const t = typeof d.target === 'object' ? d.target : contribNodes.find(n => n.id === d.target);
+      return (s && s._hidden) || (t && t._hidden) ? 'none' : '';
+    });
+  }
+
+  // Adjust forces for hidden nodes
+  if (contribSimulation) {
+    contribSimulation.force('charge').strength(n => n._hidden ? 0 : -180);
+    contribSimulation.force('link').strength(l => {
+      const sh = typeof l.source === 'object' ? l.source._hidden : false;
+      const th = typeof l.target === 'object' ? l.target._hidden : false;
+      return (sh || th) ? 0 : Math.min(l.weight / 5, 0.6);
+    });
+    contribSimulation.force('collision').radius(n => n._hidden ? 0 : 55);
+    contribSimulation.alpha(0.4).restart();
+  }
+
+  updateContributorStats();
+}
+
+function clearContributorFilters() {
+  document.getElementById('cfilter-name').value = '';
+  document.getElementById('cfilter-min-connections').value = 0;
+  document.getElementById('cfilter-min-connections-val').textContent = '0';
+  document.getElementById('toggle-contrib-orphans').checked = true;
+  applyContributorFilters();
+}
+
+// ============================================================
+// Contributor stats
+// ============================================================
+function updateContributorStats() {
+  const visible = contribNodes.filter(n => !n._hidden);
+  const total = contribNodes.length;
+
+  const cstatEl = document.getElementById('cstat-contributors');
+  if (cstatEl) cstatEl.innerHTML = visible.length < total
+    ? `${visible.length}<span class="stat-total"> /${total}</span>` : `${total}`;
+
+  const visSet = new Set(visible.map(n => n.id));
+  const visEdges = contribLinks.filter(l => {
+    const sid = typeof l.source === 'object' ? l.source.id : l.source;
+    const tid = typeof l.target === 'object' ? l.target.id : l.target;
+    return visSet.has(sid) && visSet.has(tid);
+  });
+  const cconnEl = document.getElementById('cstat-connections');
+  if (cconnEl) cconnEl.textContent = visEdges.length;
+
+  // Degree per visible node
+  const degree = {};
+  visible.forEach(n => { degree[n.id] = 0; });
+  visEdges.forEach(l => {
+    const sid = typeof l.source === 'object' ? l.source.id : l.source;
+    const tid = typeof l.target === 'object' ? l.target.id : l.target;
+    if (degree[sid] !== undefined) degree[sid]++;
+    if (degree[tid] !== undefined) degree[tid]++;
+  });
+
+  const topByDegree = visible
+    .map(n => ({ node: n, deg: degree[n.id] || 0 }))
+    .sort((a, b) => b.deg - a.deg)
+    .slice(0, 12);
+
+  const topContribEl = document.getElementById('cstats-top-contributors');
+  if (topContribEl) topContribEl.innerHTML = topByDegree.map(({ node, deg }) => `
+    <div class="contrib-stat-row"
+         onmouseenter="setContribGraphHover('${esc(node.login)}')"
+         onmouseleave="clearContribGraphHover()">
+      <img class="contrib-stat-avatar" src="${esc(node.avatar_url || '')}" alt="${esc(node.login)}" loading="lazy">
+      <span class="contrib-stat-name">${esc(node.login)}</span>
+      <span class="contrib-stat-count">${deg} conn · ${node.repos.length} repos</span>
+    </div>`).join('') || '<em style="color:var(--txt-m);font-size:11px">No contributors</em>';
+
+  const topPairs = visEdges.slice().sort((a, b) => b.weight - a.weight).slice(0, 10);
+  const topPairsEl = document.getElementById('cstats-top-pairs');
+  if (topPairsEl) topPairsEl.innerHTML = topPairs.map(l => {
+    const sid = typeof l.source === 'object' ? l.source.id : l.source;
+    const tid = typeof l.target === 'object' ? l.target.id : l.target;
+    const sn = contribNodes.find(n => n.id === sid);
+    const tn = contribNodes.find(n => n.id === tid);
+    if (!sn || !tn) return '';
+    return `<div class="contrib-stat-row"
+         onmouseenter="setContribPairHover('${esc(sid)}', '${esc(tid)}')"
+         onmouseleave="clearContribGraphHover()">
+      <img class="contrib-stat-avatar" src="${esc(sn.avatar_url||'')}" alt="${esc(sid)}" loading="lazy">
+      <img class="contrib-stat-avatar" src="${esc(tn.avatar_url||'')}" alt="${esc(tid)}" loading="lazy">
+      <span class="contrib-stat-name">${esc(sid)} &amp; ${esc(tid)}</span>
+      <span class="contrib-stat-count">${l.weight} repo${l.weight !== 1 ? 's' : ''}</span>
+    </div>`;
+  }).join('') || '<em style="color:var(--txt-m);font-size:11px">No connections</em>';
+}
+
+// ============================================================
+// Utilities
+// ============================================================
+function sparkline(data, width, height) {
+  if (!data || !data.length) return '';
+  const max = Math.max(...data, 1);
+  const n = data.length;
+  const barW = width / n;
+
+  const bars = data.map((v, i) => {
+    const h = Math.max((v / max) * height, v > 0 ? 1 : 0);
+    const x = i * barW;
+    const y = height - h;
+    return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${(barW - 0.5).toFixed(1)}" height="${h.toFixed(1)}" rx="1" fill="#388bfd" opacity="0.75"/>`;
+  }).join('');
+
+  return `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">${bars}</svg>`;
+}
+</script>
+</body>
+</html>
