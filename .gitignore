@@ -10,3 +10,4 @@ venv/
 
 # Exclude local data overrides — the workflow commits docs/data.json automatically
 docs/data.json
+docs/.claude
