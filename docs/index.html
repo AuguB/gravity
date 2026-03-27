@@ -968,6 +968,7 @@ let vpTransform = { x: 0, y: 0, k: 1 };   // viewport pan/zoom
 let hoveredNodeId = null;
 let hoveredContribPair = null;  // { a, b } when a pair stat row is hovered
 let highlightedDepName = null;
+let highlightedLang = null;
 let highlightedContribLogin = null;
 let focusedNodeId = null;
 let focusMode = null;       // 'with-deps' | 'node-only'
@@ -1750,9 +1751,10 @@ function setupNodeInteraction(el, node) {
 function applyHighlight() {
   const activeNodeId   = hoveredNodeId;
   const activeDepName  = highlightedDepName;
+  const activeLang     = highlightedLang;
   const activeContrib  = highlightedContribLogin;
 
-  if (!activeNodeId && !activeDepName && !activeContrib) {
+  if (!activeNodeId && !activeDepName && !activeLang && !activeContrib) {
     // No highlight — clear everything
     document.querySelectorAll('.repo-node').forEach(el => {
       el.classList.remove('dimmed', 'highlighted');
@@ -1782,6 +1784,12 @@ function applyHighlight() {
           r.dependencies.internal.includes(activeDepName)) {
         relatedIds.add(r.id);
       }
+    });
+  }
+
+  if (activeLang) {
+    DATA.repos.forEach(r => {
+      if (r.languages && r.languages[activeLang]) relatedIds.add(r.id);
     });
   }
 
@@ -2012,7 +2020,9 @@ function updateStats() {
     const color = LANG_COLORS[lang] || '#8b949e';
     const kb = bytes > 1e6 ? `${(bytes/1e6).toFixed(1)}M` : bytes > 1e3 ? `${(bytes/1e3).toFixed(0)}K` : `${bytes}`;
     const pct = (bytes / totalBytes * 100).toFixed(1);
-    return `<div class="lang-stat-row">
+    return `<div class="lang-stat-row" style="cursor:pointer"
+         onmouseenter="setHighlightLang('${esc(lang)}')"
+         onmouseleave="setHighlightLang(null)">
       <div class="lang-stat-dot" style="background:${color}"></div>
       <span class="lang-stat-name">${esc(lang)}</span>
       <span class="lang-stat-val">${pct}% (${kb}B)</span>
@@ -2067,6 +2077,11 @@ function updateStats() {
 }
 
 let _sidebarHoverTimer;
+function setHighlightLang(lang) {
+  if (lang === null) { highlightedLang = null; applyHighlight(); return; }
+  highlightedLang = lang; applyHighlight();
+}
+
 function setHighlightDep(name) {
   clearTimeout(_sidebarHoverTimer);
   if (name === null) { highlightedDepName = null; applyHighlight(); return; }
