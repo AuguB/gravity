@@ -263,6 +263,16 @@ def extract_deps(client, owner, repo, languages):
     return list(dict.fromkeys(deps))[:60]  # deduplicate, limit
 
 
+def load_cache(output_path):
+    """Load existing data.json as a dict keyed by full_name, for cache reuse."""
+    try:
+        with open(output_path, encoding="utf-8") as f:
+            data = json.load(f)
+        return {r["full_name"]: r for r in data.get("repos", []) if "full_name" in r}
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
 def build_internal_deps(repos_data):
     """Populate internal dependency edges by matching external dep names to repo names."""
     repo_names = {r["name"] for r in repos_data}
@@ -506,20 +516,31 @@ Examples:
     if args.limit:
         all_repos = all_repos[: args.limit]
 
-    print(f"\nProcessing {len(all_repos)} repos total...\n")
+    cache = load_cache(args.output)
+    print(f"\nProcessing {len(all_repos)} repos total  ({len(cache)} cached)...\n")
 
     repos_data = []
+    cached_count = 0
     for i, (repo, repo_type) in enumerate(all_repos):
         print(f"  [{i+1:>3}/{len(all_repos)}] {repo['full_name']:<50}  [{repo_type}]", end="", flush=True)
         try:
-            repo_data = process_repo(client, repo)
-            repo_data["type"] = repo_type
+            cached = cache.get(repo["full_name"])
+            if cached and cached.get("pushed_at") == repo.get("pushed_at"):
+                repo_data = cached
+                repo_data["type"] = repo_type
+                cached_count += 1
+                print("  (cached)")
+            else:
+                repo_data = process_repo(client, repo)
+                repo_data["type"] = repo_type
+                lang_count = len(repo_data["languages"])
+                contrib_count = len(repo_data["contributors"])
+                print(f"  {lang_count} langs  {contrib_count} contributors")
             repos_data.append(repo_data)
-            lang_count = len(repo_data["languages"])
-            contrib_count = len(repo_data["contributors"])
-            print(f"  {lang_count} langs  {contrib_count} contributors")
         except Exception as e:
             print(f"  ERROR: {e}")
+
+    print(f"\n  {cached_count} repos served from cache, {len(repos_data) - cached_count} re-fetched")
 
     print("\nBuilding internal dependency graph...")
     build_internal_deps(repos_data)
