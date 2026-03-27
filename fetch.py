@@ -409,22 +409,20 @@ Examples:
 
     if token:
         try:
-            user = client.get_json("/user")
+            auth_user = client.get_json("/user")
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 print("Error: Authentication failed (401 Unauthorized).")
                 print("  Possible causes:")
                 print("    - Token is invalid, expired, or revoked")
                 print("    - Token was copy-pasted incorrectly (check for extra spaces/newlines)")
-                print("    - If using SSO, authorize the token for your org at:")
-                print("      https://github.com/settings/tokens → Configure SSO")
-                print("  Required scopes: repo (or public_repo), read:org")
+                print("  Required scopes: repo (or public_repo)")
                 sys.exit(1)
             raise
-        if not user:
+        if not auth_user:
             print("Error: Could not authenticate. Check your token.")
             sys.exit(1)
-        print(f"Authenticated as: {user.get('login')}")
+        print(f"Authenticated as: {auth_user.get('login')}")
 
     # --- Owned repos ---
     print(f"\nFetching owned repos for user: {user}")
