@@ -10,17 +10,21 @@ on:
   workflow_dispatch:
     inputs:
       skip_forks:
-        description: 'Skip forked repositories'
+        description: 'Skip forked repositories (owned repos only)'
         type: boolean
         default: false
       skip_archived:
-        description: 'Skip archived repositories'
+        description: 'Skip archived repositories (owned repos only)'
         type: boolean
         default: false
       skip_private:
-        description: 'Skip private repositories'
+        description: 'Skip private repositories (owned repos only)'
         type: boolean
         default: true
+      no_contributed:
+        description: 'Skip contributed-to repos (only show owned repos)'
+        type: boolean
+        default: false
 
 jobs:
   update:
@@ -38,15 +42,16 @@ jobs:
       - name: Install dependencies
         run: pip install requests python-dotenv
 
-      - name: Fetch org data
+      - name: Fetch user data
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
-          GITHUB_ORG: ${{ github.repository_owner }}
+          GITHUB_USER: ${{ github.repository_owner }}
         run: |
           ARGS=""
           if [ "${{ inputs.skip_forks }}" = "true" ]; then ARGS="$ARGS --skip-forks"; fi
           if [ "${{ inputs.skip_archived }}" = "true" ]; then ARGS="$ARGS --skip-archived"; fi
           if [ "${{ inputs.skip_private == true || github.event_name != 'workflow_dispatch' }}" = "true" ]; then ARGS="$ARGS --skip-private"; fi
+          if [ "${{ inputs.no_contributed }}" = "true" ]; then ARGS="$ARGS --no-contributed"; fi
           python fetch.py $ARGS
 
       - name: Commit and push

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-GitHub Organization Repository Visualizer - Data Fetcher
+GitHub User Repository Visualizer - Data Fetcher
 
 Usage:
-    python fetch.py <org_name>
-    python fetch.py <org_name> --token ghp_xxxx
-    GITHUB_TOKEN=ghp_xxxx python fetch.py <org_name>
-    python fetch.py  # reads GITHUB_ORG and GITHUB_TOKEN from .env
+    python fetch.py <github_username>
+    python fetch.py <github_username> --token ghp_xxxx
+    GITHUB_TOKEN=ghp_xxxx python fetch.py <github_username>
+    python fetch.py  # reads GITHUB_USER and GITHUB_TOKEN from .env
 
 The output is written to docs/data.json by default.
 Open docs/index.html locally or push docs/ to GitHub Pages to view the visualization.
@@ -261,7 +261,7 @@ def extract_deps(client, owner, repo, languages):
     return list(dict.fromkeys(deps))[:60]  # deduplicate, limit
 
 
-def build_internal_deps(repos_data, org):
+def build_internal_deps(repos_data):
     """Populate internal dependency edges by matching external dep names to repo names."""
     repo_names = {r["name"] for r in repos_data}
 
@@ -295,7 +295,24 @@ def build_internal_deps(repos_data, org):
         repo["dependencies"]["internal"] = sorted(internal)
 
 
-def process_repo(client, repo, org):
+def fetch_contributed_repo_names(client, user):
+    """Return set of 'owner/repo' full-names for repos the user contributed to but doesn't own."""
+    events = client.get_all_pages(f"/users/{user}/events", max_pages=3)
+    names = set()
+    for ev in (events or []):
+        if ev.get("type") in (
+            "PushEvent", "PullRequestEvent", "CreateEvent",
+            "CommitCommentEvent", "PullRequestReviewEvent",
+        ):
+            full_name = ev.get("repo", {}).get("name", "")
+            if full_name and "/" in full_name:
+                owner = full_name.split("/")[0]
+                if owner.lower() != user.lower():
+                    names.add(full_name)
+    return names
+
+
+def process_repo(client, repo):
     name = repo["name"]
     owner = repo["owner"]["login"]
 
@@ -349,88 +366,123 @@ def main():
     dotenv.load_dotenv()
 
     parser = argparse.ArgumentParser(
-        description="Fetch GitHub org data for org-repo-viz",
+        description="Fetch GitHub user data for gravity",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python fetch.py my-org
-  python fetch.py my-org --token ghp_xxxx
-  GITHUB_TOKEN=ghp_xxxx python fetch.py my-org --skip-forks
-  python fetch.py  # reads GITHUB_ORG and GITHUB_TOKEN from .env
+  python fetch.py my-username
+  python fetch.py my-username --token ghp_xxxx
+  GITHUB_TOKEN=ghp_xxxx python fetch.py my-username --skip-forks
+  python fetch.py  # reads GITHUB_USER and GITHUB_TOKEN from .env
         """,
     )
-    parser.add_argument("org", nargs="?", default=None, help="GitHub organization name (or set GITHUB_ORG in .env)")
+    parser.add_argument("user", nargs="?", default=None, help="GitHub username (or set GITHUB_USER in .env)")
     parser.add_argument("--output", default="docs/data.json", help="Output path (default: docs/data.json)")
     parser.add_argument("--token", default=None, help="GitHub personal access token")
-    parser.add_argument("--skip-forks", action="store_true", help="Skip forked repositories")
-    parser.add_argument("--skip-archived", action="store_true", help="Skip archived repositories")
-    parser.add_argument("--skip-private", action="store_true", help="Skip private repositories")
-    parser.add_argument("--limit", type=int, default=None, help="Process at most N repos (for testing)")
+    parser.add_argument("--skip-forks", action="store_true", help="Skip forked repositories (owned repos only)")
+    parser.add_argument("--skip-archived", action="store_true", help="Skip archived repositories (owned repos only)")
+    parser.add_argument("--skip-private", action="store_true", help="Skip private repositories (owned repos only)")
+    parser.add_argument("--no-contributed", action="store_true", help="Skip contributed-to repos (only show owned repos)")
+    parser.add_argument("--limit", type=int, default=None, help="Process at most N repos total (for testing)")
     args = parser.parse_args()
 
-    org = args.org
-    if org is None:
-        org = os.environ.get("GITHUB_ORG")
-    if not org:
-        print("Error: GitHub organization required.")
-        print("  Pass it as an argument or set GITHUB_ORG in .env")
+    user = args.user
+    if user is None:
+        user = os.environ.get("GITHUB_USER")
+    if not user:
+        print("Error: GitHub username required.")
+        print("  Pass it as an argument or set GITHUB_USER in .env")
         sys.exit(1)
 
     token = args.token or os.environ.get("GITHUB_TOKEN")
     if not token:
         print("Error: GitHub token required.")
         print("  Set GITHUB_TOKEN environment variable or pass --token <token>")
-        print("  Token needs: read:org, repo (or public_repo for public-only)")
+        print("  Token needs: repo (or public_repo for public-only)")
         sys.exit(1)
 
     client = GitHubClient(token)
 
     try:
-        user = client.get_json("/user")
+        auth_user = client.get_json("/user")
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 401:
             print("Error: Authentication failed (401 Unauthorized).")
             print("  Possible causes:")
             print("    - Token is invalid, expired, or revoked")
             print("    - Token was copy-pasted incorrectly (check for extra spaces/newlines)")
-            print("    - If using SSO, authorize the token for your org at:")
-            print("      https://github.com/settings/tokens → Configure SSO")
-            print("  Required scopes: repo (or public_repo), read:org")
+            print("  Required scopes: repo (or public_repo)")
             sys.exit(1)
         raise
-    if not user:
+    if not auth_user:
         print("Error: Could not authenticate. Check your token.")
         sys.exit(1)
-    print(f"Authenticated as: {user.get('login')}")
+    print(f"Authenticated as: {auth_user.get('login')}")
 
-    print(f"\nFetching repos for org: {org}")
-    repos = client.get_all_pages(f"/orgs/{org}/repos", {"type": "all", "sort": "updated"}, max_pages=50)
+    # --- Owned repos ---
+    print(f"\nFetching owned repos for user: {user}")
+    owned_repos = client.get_all_pages(
+        f"/users/{user}/repos",
+        {"type": "owner", "sort": "updated"},
+        max_pages=50,
+    )
 
-    if not repos:
-        print(f"Error: No repos found for '{org}'. Check org name and token permissions.")
+    if owned_repos is None:
+        print(f"Error: Could not fetch repos for '{user}'. Check username and token permissions.")
         sys.exit(1)
 
     if args.skip_forks:
-        repos = [r for r in repos if not r.get("fork")]
+        owned_repos = [r for r in owned_repos if not r.get("fork")]
     if args.skip_archived:
-        repos = [r for r in repos if not r.get("archived")]
+        owned_repos = [r for r in owned_repos if not r.get("archived")]
     if args.skip_private:
-        repos = [r for r in repos if not r.get("private")]
+        owned_repos = [r for r in owned_repos if not r.get("private")]
 
-    # Always exclude the .github meta-repo and this tool's own repo
+    # Exclude this tool's own repo and .github meta-repo
     self_repo = os.environ.get("GITHUB_REPOSITORY", "").split("/")[-1]
-    repos = [r for r in repos if r.get("name") != ".github" and (not self_repo or r.get("name") != self_repo)]
+    owned_repos = [
+        r for r in owned_repos
+        if r.get("name") != ".github" and (not self_repo or r.get("name") != self_repo)
+    ]
+
+    owned_ids = {r["id"] for r in owned_repos}
+    print(f"  Found {len(owned_repos)} owned repos")
+
+    # --- Contributed repos ---
+    contributed_repos = []
+    if not args.no_contributed:
+        print(f"\nFetching contributed repos for user: {user}")
+        contrib_names = fetch_contributed_repo_names(client, user)
+        print(f"  Found {len(contrib_names)} external repos in recent events")
+        for full_name in contrib_names:
+            repo = client.get_json(f"/repos/{full_name}")
+            if repo and repo.get("id") not in owned_ids:
+                contributed_repos.append(repo)
+        print(f"  Fetched {len(contributed_repos)} contributed repos")
+
+    # Combine, deduplicating by id
+    seen_ids = set()
+    all_repos = []
+    for repo in owned_repos:
+        if repo["id"] not in seen_ids:
+            seen_ids.add(repo["id"])
+            all_repos.append((repo, "owned"))
+    for repo in contributed_repos:
+        if repo["id"] not in seen_ids:
+            seen_ids.add(repo["id"])
+            all_repos.append((repo, "contributed"))
 
     if args.limit:
-        repos = repos[: args.limit]
+        all_repos = all_repos[: args.limit]
 
-    print(f"Processing {len(repos)} repos...\n")
+    print(f"\nProcessing {len(all_repos)} repos total...\n")
 
     repos_data = []
-    for i, repo in enumerate(repos):
-        print(f"  [{i+1:>3}/{len(repos)}] {repo['name']:<40}", end="", flush=True)
+    for i, (repo, repo_type) in enumerate(all_repos):
+        print(f"  [{i+1:>3}/{len(all_repos)}] {repo['full_name']:<50}  [{repo_type}]", end="", flush=True)
         try:
-            repo_data = process_repo(client, repo, org)
+            repo_data = process_repo(client, repo)
+            repo_data["type"] = repo_type
             repos_data.append(repo_data)
             lang_count = len(repo_data["languages"])
             contrib_count = len(repo_data["contributors"])
@@ -439,12 +491,12 @@ Examples:
             print(f"  ERROR: {e}")
 
     print("\nBuilding internal dependency graph...")
-    build_internal_deps(repos_data, org)
+    build_internal_deps(repos_data)
     edge_count = sum(len(r["dependencies"]["internal"]) for r in repos_data)
     print(f"Found {edge_count} internal dependency edges")
 
     output = {
-        "org": org,
+        "user": user,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "total_repos": len(repos_data),
         "repos": repos_data,
@@ -458,7 +510,7 @@ Examples:
     size_kb = out_path.stat().st_size / 1024
     print(f"\nSaved: {out_path}  ({size_kb:.1f} KB)")
     print(f"\nNext steps:")
-    print(f"  1. Preview locally:  open docs/index.html")
+    print(f"  1. Preview locally:  python3 -m http.server 8000 --directory docs")
     print(f"  2. Publish:          git add docs/ && git commit -m 'Update viz data' && git push")
     print(f"                       Then enable GitHub Pages from Settings > Pages > Branch: main, Folder: /docs")
 
