@@ -1,0 +1,49 @@
+I want to write a tool for visualizing repos within an org.
+
+1. The tool should take an org's name, process whatever repos the org has on GitHub, and produce an interactive graph visualization of the repos that show their interdependencies.
+
+2. Repos are graph nodes, with a tile format.
+
+3. The tile shows the name of the repo on top, and has an expandable 'details' section.
+
+4. The details section has a list of expandable sections, namely:
+
+- date created
+
+- contributors sorted on number of PRs (GH handle, avatar, commits/PRs)
+
+- commit frequency graph
+
+- lines of code per language
+
+- dependencies
+
+- README
+
+5. When a section is expanded and the 'details' section is collapsed, the expanded section stays visible.
+
+6. Nodes are laid out according to a force directed graph layout algorithm, but they can be dragged around.
+
+7. A settings sidebar allows setting the following options:
+
+- expand a section for all nodes
+
+- toggle visibility of orphans
+
+- toggle visibility of standalone packages (no dependencies)
+
+8. A stats sidebar shows the following:
+
+- total number of repos
+
+- total number of lines of code per language
+
+- total commit frequency graph
+
+- most popular external dependencies (when the dep name is hovered here, the repos that depend on it must be highlighted, or rather those that don't must be slightly grayed out)
+
+- most active contributors in total commits, same highlighting logic applies here
+
+9. When a repo is hovered, all other repos except those with a dependence relationship are grayed out according to the same logic
+
+The idea must be to somehow provide the secrets to the tool and run it locally. The results must be saved to a local folder, which can then be published to GH. Publishing to GH must result in the graph being hosted and interactable from the GH UI. .

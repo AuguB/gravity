@@ -1,0 +1,57 @@
+name: Update visualization
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/data.json'  # avoid re-triggering on the workflow's own commit
+  schedule:
+    - cron: '0 3 * * 1'  # Every Monday at 03:00 UTC
+  workflow_dispatch:
+    inputs:
+      skip_forks:
+        description: 'Skip forked repositories'
+        type: boolean
+        default: false
+      skip_archived:
+        description: 'Skip archived repositories'
+        type: boolean
+        default: false
+      skip_private:
+        description: 'Skip private repositories'
+        type: boolean
+        default: true
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install requests python-dotenv
+
+      - name: Fetch org data
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+          GITHUB_ORG: ${{ github.repository_owner }}
+        run: |
+          ARGS=""
+          if [ "${{ inputs.skip_forks }}" = "true" ]; then ARGS="$ARGS --skip-forks"; fi
+          if [ "${{ inputs.skip_archived }}" = "true" ]; then ARGS="$ARGS --skip-archived"; fi
+          if [ "${{ inputs.skip_private == true || github.event_name != 'workflow_dispatch' }}" = "true" ]; then ARGS="$ARGS --skip-private"; fi
+          python fetch.py $ARGS
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f docs/data.json
+          git diff --staged --quiet && echo "No changes" || (git commit -m "chore: update visualization data [skip ci]" && git push)

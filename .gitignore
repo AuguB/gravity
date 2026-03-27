@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Secrets
+.env
+
+
+# Exclude local data overrides — the workflow commits docs/data.json automatically
+docs/data.json
+docs/*
+!docs/.gitkeep
